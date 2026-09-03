@@ -169,6 +169,10 @@ which is usually whatever else the box already serves. A dedicated port has no
 such ambiguity and needs nothing added to DNS: `http://<server-ip>:8080` and
 `http://homelab:8080` both work.
 
+The port is arbitrary. 8080 is shown here, but it is a common default and
+worth avoiding if anything else on the box might want it; pick something
+quieter and change it in all three places below.
+
 ```apache
 Listen 8080
 
