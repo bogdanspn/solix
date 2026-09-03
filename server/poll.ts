@@ -96,6 +96,19 @@ export function estimateEta(snapshot: Snapshot, ratedKwh: number): Eta {
 
 let rediscovering = false;
 let lastRediscoverAt = 0;
+/*
+ * How long to wait before sweeping again, doubling after each sweep that finds
+ * nothing.
+ *
+ * This was a flat two minutes, which meant a Solarbank that was genuinely
+ * unreachable got a full 254-address sweep every two minutes for as long as it
+ * stayed away. Two machines doing that at once exhausted the connection slots
+ * on every Anker device on the LAN, and the battery stopped answering the
+ * phone app as well as this dashboard. Retrying harder made the outage.
+ */
+const REDISCOVER_MIN_MS = 120_000;
+const REDISCOVER_MAX_MS = 1_800_000;
+let rediscoverWaitMs = REDISCOVER_MIN_MS;
 
 /**
  * Hunt for the Solarbank again after it stops answering.
@@ -106,14 +119,19 @@ let lastRediscoverAt = 0;
  */
 export async function rediscover(force = false): Promise<string | null> {
   if (rediscovering) return null;
-  // A full sweep is ~500 TCP connects; do not run it in a tight loop.
-  if (!force && Date.now() - lastRediscoverAt < 120_000) return null;
+  // A full sweep is ~250 TCP connects per subnet; do not run it in a tight loop.
+  if (!force && Date.now() - lastRediscoverAt < rediscoverWaitMs) return null;
 
   rediscovering = true;
   lastRediscoverAt = Date.now();
   try {
     const found = await discoverSolarbank(config.port, config.unitId, device?.serial);
-    if (!found) return null;
+    if (!found) {
+      rediscoverWaitMs = Math.min(rediscoverWaitMs * 2, REDISCOVER_MAX_MS);
+      console.warn("[rediscover] no Solarbank found, next sweep in %d min", Math.round(rediscoverWaitMs / 60_000));
+      return null;
+    }
+    rediscoverWaitMs = REDISCOVER_MIN_MS;
 
     if (found.host !== config.host) {
       console.log("[rediscover] Solarbank moved to %s (%s)", found.host, found.serial);

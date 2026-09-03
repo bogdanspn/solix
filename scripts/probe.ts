@@ -11,13 +11,12 @@
  * This script determines 1 and 2 by probing, and gives you the numbers to
  * confirm 3 against the phone app. It writes its findings to .env.
  */
-import net from "node:net";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import ModbusRTU from "modbus-serial";
 import { REGISTERS, BATTERY_STATUS } from "../server/registers.ts";
 import { decodeValue } from "../server/decode.ts";
+import { scanSubnet } from "../server/discovery.ts";
 
 const PORT = Number(process.env.SOLIX_PORT ?? 502);
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -34,7 +33,7 @@ interface Found {
 
 async function main() {
   const hostArg = process.argv[2] ?? process.env.SOLIX_HOST;
-  const hosts = hostArg ? [hostArg] : await scanSubnet();
+  const hosts = hostArg ? [hostArg] : await scan();
 
   if (hosts.length === 0) {
     console.error(
@@ -126,6 +125,22 @@ async function main() {
       ].join("\n"),
     );
   }
+}
+
+/** The shared LAN sweep, with the running commentary this script wants. */
+async function scan(): Promise<string[]> {
+  return scanSubnet(PORT, {
+    onStart: (bases, count) =>
+      console.log(
+        "No SOLIX_HOST set. Scanning %s for port %d (%d addresses)...",
+        bases.map((b) => b + ".0/24").join(", "),
+        PORT,
+        count,
+      ),
+    onOpen: (ip) => console.log("  open: %s:%d", ip, PORT),
+    onRetry: (n) =>
+      console.log("  retrying %d host(s) that answered ARP but not port %d...", n, PORT),
+  });
 }
 
 /** A combination is right if the model reads as text and SOC is a real percentage. */
@@ -349,61 +364,6 @@ function writeEnv(found: Found, invertBattery: boolean | null, plugHosts: string
 
   fs.writeFileSync(envPath, body);
   console.log("Wrote %s", envPath);
-}
-
-/** Dependency-free fallback discovery: TCP-connect sweep of the local /24. */
-async function scanSubnet(): Promise<string[]> {
-  const bases = new Set<string>();
-  for (const ifaces of Object.values(os.networkInterfaces())) {
-    for (const i of ifaces ?? []) {
-      if (i.family === "IPv4" && !i.internal) bases.add(i.address.split(".").slice(0, 3).join("."));
-    }
-  }
-  if (bases.size === 0) return [];
-
-  const targets = [...bases].flatMap((base) =>
-    Array.from({ length: 254 }, (_, i) => base + "." + (i + 1)),
-  );
-  console.log(
-    "No SOLIX_HOST set. Scanning %s for port %d (%d addresses)...",
-    [...bases].map((b) => b + ".0/24").join(", "),
-    PORT,
-    targets.length,
-  );
-
-  // Bounded concurrency: Windows throttles half-open connections, and a flat
-  // Promise.all over 500 sockets produces spurious ECONNRESET / timeouts that
-  // look exactly like "nothing is there".
-  const hits: string[] = [];
-  const queue = [...targets];
-  const worker = async () => {
-    for (let ip = queue.pop(); ip !== undefined; ip = queue.pop()) {
-      if (await probePort(ip)) {
-        console.log("  open: %s:%d", ip, PORT);
-        hits.push(ip);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: 48 }, worker));
-  return hits;
-}
-
-function probePort(ip: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const s = new net.Socket();
-    let settled = false;
-    const done = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      s.destroy();
-      resolve(ok);
-    };
-    s.setTimeout(2000);
-    s.once("connect", () => done(true));
-    s.once("timeout", () => done(false));
-    s.once("error", () => done(false));
-    s.connect(PORT, ip);
-  });
 }
 
 main().catch((e) => {

@@ -5,6 +5,7 @@
  * Modbus switched on later can be picked up without editing .env by hand.
  */
 import net from "node:net";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,10 +21,35 @@ export interface FoundPlug {
   watts: number;
 }
 
-/** Every local IPv4 /24 this machine sits on. */
+/**
+ * Virtual interfaces to ignore when working out what to scan.
+ *
+ * A homelab running Docker presents several bridges, and sweeping them is not
+ * merely wasted effort: on the reported run they added 508 addresses to a
+ * 762-address sweep, and every one of them held a worker slot for the full
+ * timeout while the real devices were being probed.
+ */
+const VIRTUAL_IFACE = /^(docker|br-|veth|virbr|vmnet|tun|tap|zt|wg|lo)/i;
+
+/**
+ * Every local IPv4 /24 worth scanning.
+ *
+ * SOLIX_SUBNETS overrides the detection entirely, as a comma separated list of
+ * /24 bases ("192.168.3"), for a host whose real LAN sits behind an interface
+ * this cannot tell apart from a bridge.
+ */
 export function localSubnets(): string[] {
+  const override = (process.env.SOLIX_SUBNETS ?? "").trim();
+  if (override) {
+    return override
+      .split(",")
+      .map((s) => s.trim().split(".").slice(0, 3).join("."))
+      .filter(Boolean);
+  }
+
   const bases = new Set<string>();
-  for (const ifaces of Object.values(os.networkInterfaces())) {
+  for (const [name, ifaces] of Object.entries(os.networkInterfaces())) {
+    if (VIRTUAL_IFACE.test(name)) continue;
     for (const i of ifaces ?? []) {
       if (i.family === "IPv4" && !i.internal) {
         bases.add(i.address.split(".").slice(0, 3).join("."));
@@ -51,31 +77,117 @@ function probePort(ip: string, port: number, timeoutMs: number): Promise<boolean
   });
 }
 
-/**
- * TCP-connect sweep of the local /24s.
- *
- * Concurrency is bounded: Windows throttles half-open connections, and a flat
- * Promise.all over 500 sockets produces spurious timeouts that look exactly
- * like "nothing is there".
- */
-export async function scanSubnet(port: number, onOpen?: (ip: string) => void): Promise<string[]> {
-  const targets = localSubnets().flatMap((base) =>
-    Array.from({ length: 254 }, (_, i) => `${base}.${i + 1}`),
-  );
-  if (targets.length === 0) return [];
-
+/** Run probePort over a list of addresses with a bounded number in flight. */
+async function sweep(
+  targets: string[],
+  port: number,
+  concurrency: number,
+  timeoutMs: number,
+  onOpen?: (ip: string) => void,
+): Promise<string[]> {
   const hits: string[] = [];
   const queue = [...targets];
   const worker = async () => {
     for (let ip = queue.pop(); ip !== undefined; ip = queue.pop()) {
-      if (await probePort(ip, port, 2000)) {
+      if (await probePort(ip, port, timeoutMs)) {
         onOpen?.(ip);
         hits.push(ip);
       }
     }
   };
-  await Promise.all(Array.from({ length: 48 }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
   return hits;
+}
+
+/**
+ * Addresses this machine has resolved to a MAC address.
+ *
+ * This is the key to a reliable retry. ARP resolution happens before the SYN
+ * is ever sent, so a host that dropped the TCP handshake still leaves a
+ * neighbour entry behind. That turns "retry the 230 addresses that stayed
+ * silent" into "retry the 25 that are demonstrably alive", which is cheap
+ * enough to do slowly and carefully.
+ */
+async function neighbours(): Promise<Set<string>> {
+  const found = new Set<string>();
+  const cmd =
+    process.platform === "win32"
+      ? { file: "arp", args: ["-a"] }
+      : process.platform === "linux"
+        ? { file: "ip", args: ["neigh", "show"] }
+        : { file: "arp", args: ["-an"] };
+
+  const text = await new Promise<string>((resolve) => {
+    let out = "";
+    try {
+      const p = spawn(cmd.file, cmd.args, { stdio: ["ignore", "pipe", "ignore"] });
+      p.stdout.setEncoding("utf8");
+      p.stdout.on("data", (c) => (out += c));
+      p.once("error", () => resolve(""));
+      p.once("close", () => resolve(out));
+    } catch {
+      resolve("");
+    }
+  });
+
+  for (const line of text.split(/\r?\n/)) {
+    // An entry without a resolved MAC (FAILED, INCOMPLETE, or Windows'
+    // "invalid") means the address did not answer at layer 2 either.
+    if (/incomplete|failed|invalid/i.test(line)) continue;
+    if (!/([0-9a-f]{2}[:-]){5}[0-9a-f]{2}/i.test(line)) continue;
+    const ip = /\b(\d{1,3}(?:\.\d{1,3}){3})\b/.exec(line)?.[1];
+    if (ip) found.add(ip);
+  }
+  return found;
+}
+
+export interface ScanProgress {
+  /** Called once the target list is known, before any connecting starts. */
+  onStart?: (bases: string[], count: number) => void;
+  onOpen?: (ip: string) => void;
+  /** Called before the careful second pass, with how many hosts it will retry. */
+  onRetry?: (count: number) => void;
+}
+
+/**
+ * TCP-connect sweep of the local /24s, in two passes.
+ *
+ * One pass is not enough. These devices are on WiFi, and a burst of concurrent
+ * SYNs loses packets: three consecutive runs of the single-pass version
+ * returned five, then seven, then a different seven of the ten sockets. A scan
+ * whose answer changes between runs is not finding absent devices, it is
+ * dropping present ones, and treating that as "the device is gone" is what
+ * previously sent the server into a repeated full-subnet sweep.
+ *
+ * So: a fast wide pass to find the obvious responders, then a slow narrow pass
+ * over everything the ARP table says is alive but that did not answer.
+ */
+export async function scanSubnet(port: number, progress?: ScanProgress): Promise<string[]> {
+  const bases = localSubnets();
+  const targets = bases.flatMap((base) => Array.from({ length: 254 }, (_, i) => `${base}.${i + 1}`));
+  if (targets.length === 0) return [];
+
+  progress?.onStart?.(bases, targets.length);
+
+  const hits = new Set(await sweep(targets, port, 32, 1500, progress?.onOpen));
+
+  // Anything with a MAC address but no answer on 502 is either a device that
+  // dropped the handshake or something unrelated that will refuse quickly.
+  const inScope = (ip: string) => bases.includes(ip.split(".").slice(0, 3).join("."));
+  const retry = [...(await neighbours())].filter((ip) => inScope(ip) && !hits.has(ip));
+
+  if (retry.length > 0) {
+    progress?.onRetry?.(retry.length);
+    for (const [concurrency, timeoutMs] of [[8, 4000] as const, [4, 6000] as const]) {
+      const pending = retry.filter((ip) => !hits.has(ip));
+      if (pending.length === 0) break;
+      for (const ip of await sweep(pending, port, concurrency, timeoutMs, progress?.onOpen)) {
+        hits.add(ip);
+      }
+    }
+  }
+
+  return [...hits];
 }
 
 /** Identify a Smart Plug Gen 2 (A17X8) by its own register block. */

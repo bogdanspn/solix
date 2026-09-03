@@ -47,12 +47,42 @@ sudo -u solix npm prune --omit=dev   # keeps dotenv, express, modbus-serial, tsx
 Alternatively build on your workstation and copy `dist/` across, in which case
 `npm ci --omit=dev` on the server is enough.
 
+### If npm blocks the install scripts
+
+Recent npm versions refuse to run package install scripts until you approve
+them, and print a list at the end of `npm ci`. Two show up here:
+
+```sh
+sudo -u solix npm install-scripts approve esbuild
+```
+
+- **`esbuild` must be approved.** Its install script fetches the platform
+  binary, `tsx` will not start without it, and `tsx` is what runs the server.
+- **`@serialport/bindings-cpp` does not.** It is an optional dependency of
+  `modbus-serial`, used only for serial RTU connections. This talks Modbus over
+  TCP, so leaving it unbuilt costs nothing.
+
 ### Finding the hardware
 
 Nothing needs configuring by hand. On startup, with no `SOLIX_HOST` set, the
 server sweeps the local `/24` for the Solarbank and writes what it finds to
 `.env`. It also re-sweeps by serial if the device stops answering, so a DHCP
 lease change heals itself.
+
+The sweep runs in two passes and takes about a minute. This is deliberate. The
+devices are on WiFi, and a single fast pass loses them: measured on a network
+with eleven devices, one pass found five. The second pass re-probes, slowly,
+only the addresses the ARP table shows are alive, which recovered the other
+six. If your scan reports a different set of devices each time you run it, it
+is dropping packets, not finding absent hardware.
+
+On a host running Docker, note that the Docker bridges are skipped. If your
+real LAN sits behind an interface that looks like a bridge, name the subnet
+explicitly:
+
+```sh
+echo "SOLIX_SUBNETS=192.168.3" | sudo -u solix tee -a /opt/solix/app/.env
+```
 
 To do it up front and see the register dump:
 
@@ -78,6 +108,7 @@ echo "HTTP_HOST=127.0.0.1" | sudo -u solix tee -a /opt/solix/app/.env
 | `SOLIX_REGISTER_KIND` | `holding` (FC3) or `input` (FC4). |
 | `SOLIX_INVERT_BATTERY`, `SOLIX_INVERT_GRID` | Sign normalisation, set by the probe. |
 | `SOLIX_PLUGS` | Smart Plug addresses, comma separated. Maintained by the Rescan button. |
+| `SOLIX_SUBNETS` | Override which /24s to scan, comma separated (`192.168.3`). Default: every non-virtual interface. |
 | `SOLIX_METER` | Smart Meter address, if one is on the LAN. Only with a meter are the grid and load registers real house measurements. |
 | `HTTP_HOST`, `HTTP_PORT` | Bind address and port. |
 | `POLL_INTERVAL_MS` | Default 5000. Socket energy is integrated from these samples, so a longer interval costs accuracy on short loads. |
@@ -245,10 +276,16 @@ The last two drive a browser, so they need the dev dependencies present.
   `npm run probe`.
 - **Do not expose this to the internet.** There is no authentication, and the
   settings endpoints write to the battery. Keep it on the LAN or behind a VPN.
-- **Modbus concurrency is limited but not single.** Two simultaneous
-  connections to the Solarbank were verified working, a diagnostic script
-  alongside the running server. Adding a third consumer, such as Home
-  Assistant polling the same unit, risks intermittent dropped reads.
+- **Modbus concurrency is limited, and exceeding it takes the device down.**
+  Two simultaneous connections to the Solarbank were verified working. Three
+  was too many: running a LAN sweep from a second machine while the dashboard
+  was polling left the battery refusing connections from the dashboard, the
+  sweep and the phone app alike, and it only recovered once the dashboard was
+  stopped and its connections released. So do not run `npm run probe` on one
+  machine while a dashboard is polling from another, and treat Home Assistant
+  on the same unit as a third consumer too. Rediscovery backs off from two
+  minutes to thirty after repeated failures for the same reason: sweeping
+  harder for a missing device is what caused the outage.
 - **Poll cost is modest.** Measured on real hardware: a full Solarbank cycle is
   around 310 ms of the 5 s window, roughly 6% duty, plus about 11 ms per plug
   read in parallel. Latency is dominated by per-request round-trip, so if you
