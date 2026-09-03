@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { PlugReading } from "../../server/types.ts";
 import { formatEnergy, formatW } from "./format.ts";
 import { IconPlug, IconRefresh } from "./Icons.tsx";
+import { Confirm } from "./Modal.tsx";
 
 /**
  * The sockets are the only measurement of household consumption on a system
@@ -12,6 +13,7 @@ export function Sockets({ plugs, onRenamed }: { plugs: PlugReading[]; onRenamed:
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [switching, setSwitching] = useState<string | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanMsg, setScanMsg] = useState<string | null>(null);
 
@@ -44,13 +46,13 @@ export function Sockets({ plugs, onRenamed }: { plugs: PlugReading[]; onRenamed:
   const offline = plugs.filter((p) => !p.online).length;
   const totalToday = plugs.reduce((s, p) => s + p.todayKwh, 0);
 
+  // The stream hands us new plug objects every poll, so the dialog reads the
+  // live plug by serial rather than holding on to the one that was clicked.
+  const pending = sorted.find((p) => p.serial === asking) ?? null;
+
   // Cutting power to a socket is a real-world action, so it always confirms.
   const toggle = async (p: PlugReading) => {
     const next = !p.on;
-    if (!window.confirm(`Switch ${p.name} ${next ? "ON" : "OFF"}?
-
-This cuts power to whatever is plugged in.`))
-      return;
     setSwitching(p.serial);
     try {
       const res = await fetch(`/api/plugs/${encodeURIComponent(p.serial)}/switch`, {
@@ -65,6 +67,7 @@ This cuts power to whatever is plugged in.`))
       setScanMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setSwitching(null);
+      setAsking(null);
     }
   };
 
@@ -106,7 +109,7 @@ This cuts power to whatever is plugged in.`))
               <div className="plug-top">
                 <button
                   className={`plug-switch ${p.on ? "on" : "off"}`}
-                  onClick={() => toggle(p)}
+                  onClick={() => setAsking(p.serial)}
                   disabled={!p.online || switching === p.serial}
                   title={p.on ? "Switch off" : "Switch on"}
                   aria-label={`${p.name} is ${p.on ? "on" : "off"}`}
@@ -168,6 +171,19 @@ This cuts power to whatever is plugged in.`))
           );
         })}
       </div>
+
+      <Confirm
+        open={pending !== null}
+        title={pending?.on ? "Switch this socket off?" : "Switch this socket on?"}
+        confirmLabel={pending?.on ? "Switch off" : "Switch on"}
+        danger={pending?.on ?? false}
+        busy={switching !== null}
+        onConfirm={() => pending && toggle(pending)}
+        onCancel={() => setAsking(null)}
+      >
+        <strong>{pending?.name}</strong> will be switched {pending?.on ? "off" : "on"}. This cuts
+        power to whatever is plugged into it.
+      </Confirm>
     </>
   );
 }

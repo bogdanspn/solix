@@ -1083,6 +1083,124 @@ h2.eyebrow,
   flex: 1;
 }
 
+/* ---------- dialogs ----------
+   Above the settings sheet (z 41): a confirmation raised from inside the
+   sheet has to sit over it, not under it. */
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: modal-fade 0.16s ease;
+}
+
+.modal {
+  width: min(420px, 100%);
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  /* Not --page: the secondary button's fill is --glass-3, which resolves to
+     the page colour in light mode and would leave Cancel invisible. */
+  background: var(--node-fill);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 30px 70px rgba(0, 0, 0, 0.5);
+  animation: modal-rise 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+:root[data-theme="light"] .modal {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 30px 60px rgba(16, 24, 40, 0.18);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.modal-head h2 {
+  font-family: var(--font-display);
+  font-size: 16px;
+  text-transform: none;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modal-body {
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.modal-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.modal-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.modal-foot {
+  display: flex;
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+
+.modal-foot .btn {
+  flex: 1;
+}
+
+.btn.danger {
+  background: var(--critical);
+  /* Dark mode's critical is a light red - white on it measures 3.0:1, so the
+     label is inked the way the accent button is. Light mode's is deep enough
+     to carry white. */
+  color: #2b0b0b;
+}
+
+:root[data-theme="light"] .btn.danger {
+  color: #fff;
+}
+
+@keyframes modal-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim,
+  .modal {
+    animation: none;
+  }
+}
+
 .field {
   padding: 18px 0;
   border-bottom: 1px solid var(--hairline);

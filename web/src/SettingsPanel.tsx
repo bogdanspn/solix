@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Settings } from "../../server/types.ts";
 import { IconClose } from "./Icons.tsx";
+import { Confirm } from "./Modal.tsx";
 
 interface Mode {
   value: string;
@@ -35,6 +36,7 @@ export function SettingsPanel({
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pending, setPending] = useState<Record<string, number | string | boolean> | null>(null);
 
   // Track the device while the user has not touched anything, so the panel
   // reflects changes made in the phone app.
@@ -44,10 +46,12 @@ export function SettingsPanel({
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // While the confirmation is up it owns Escape, so one press does not
+    // dismiss both the dialog and the sheet behind it.
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !pending && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, pending]);
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -61,16 +65,22 @@ export function SettingsPanel({
     setResult(null);
   };
 
-  const apply = async () => {
+  const apply = () => {
     const changes: Record<string, number | string | boolean> = {};
     if (draft.chargingLimitSoc !== settings.chargingLimitSoc) changes["charging_limit_soc"] = draft.chargingLimitSoc;
     if (draft.dischargeLimitSoc !== settings.dischargeLimitSoc) changes["discharge_limit_soc"] = draft.dischargeLimitSoc;
     if (draft.backupReserveSoc !== settings.backupReserveSoc) changes["backup_reserve_soc"] = draft.backupReserveSoc;
     if (draft.backupSocEnable !== settings.backupSocEnable) changes["backup_soc_enable"] = draft.backupSocEnable;
+    // Sliders dragged back to where they started leave nothing to write.
+    if (Object.keys(changes).length === 0) {
+      setDirty(false);
+      return;
+    }
+    setPending(changes);
+  };
 
-    const summary = Object.keys(changes).join(", ").replace(/_/g, " ");
-    if (!window.confirm(`Write these settings to the Solarbank?\n\n${summary}`)) return;
-
+  // Nothing is sent until the confirmation is answered.
+  const commit = async (changes: Record<string, number | string | boolean>) => {
     setBusy(true);
     setResult(null);
     try {
@@ -96,6 +106,7 @@ export function SettingsPanel({
       setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
+      setPending(null);
     }
   };
 
@@ -200,6 +211,19 @@ export function SettingsPanel({
           </button>
         </div>
       </aside>
+
+      <Confirm
+        open={pending !== null}
+        title="Write to the Solarbank?"
+        confirmLabel="Write"
+        danger
+        busy={busy}
+        onConfirm={() => pending && commit(pending)}
+        onCancel={() => setPending(null)}
+      >
+        This changes how the battery behaves:{" "}
+        <strong>{Object.keys(pending ?? {}).join(", ").replace(/_/g, " ")}</strong>.
+      </Confirm>
     </>
   );
 }

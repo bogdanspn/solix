@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Place, WeatherReport } from "../../server/weather.ts";
 import { IconCloud, IconDrop, IconPin, IconSun } from "./Icons.tsx";
+import { Modal } from "./Modal.tsx";
 
 /**
  * Weather, framed around the decision it informs: how hard to lean on the
@@ -140,106 +141,91 @@ export function useWeather(): WeatherState {
 }
 
 export function Weather({ report, needsLocation, error, adopt }: WeatherState) {
-  const [changing, setChanging] = useState(false);
+  const [picking, setPicking] = useState(false);
 
-  if (needsLocation) {
-    return (
-      <>
-        <h2 className="eyebrow">Forecast</h2>
-        <LocationPicker onPicked={adopt} />
-      </>
-    );
-  }
+  const peak = report ? Math.max(...report.days.map((d) => d.solarKwhM2), 0.1) : 1;
 
-  if (error || changing) {
-    return (
-      <>
-        <div className="chart-head">
-          <h2 className="eyebrow" style={{ margin: 0 }}>
-            Forecast
-          </h2>
-          {changing && report && (
-            <button className="icon-btn wide" onClick={() => setChanging(false)}>
-              Cancel
-            </button>
-          )}
-        </div>
-        {error && (
-          <div className="msg err" style={{ marginTop: 0, marginBottom: 14 }}>
-            Could not reach the forecast service. {error}
-          </div>
-        )}
-        <LocationPicker
-          onPicked={(r) => {
-            adopt(r);
-            setChanging(false);
-          }}
-        />
-      </>
-    );
-  }
-
-  if (!report) {
-    return (
-      <>
-        <h2 className="eyebrow">Forecast</h2>
-        <div className="empty">Loading forecast…</div>
-      </>
-    );
-  }
-
-  const peak = Math.max(...report.days.map((d) => d.solarKwhM2), 0.1);
-
+  // The header and the body both stay mounted whatever the state, so setting or
+  // changing a location never resizes the card underneath the dialog.
   return (
     <>
       <div className="chart-head">
         <h2 className="eyebrow" style={{ margin: 0 }}>
-          Forecast · {report.place.name}
+          Forecast{report && ` · ${report.place.name}`}
         </h2>
         <div className="head-actions">
-          <span className="sub-total">
-            {report.now.tempC.toFixed(0)}°C · {report.now.cloudPct}% cloud
-            {report.now.isDay && ` · ${Math.round(report.now.radiation)} W/m²`}
-          </span>
+          {report && (
+            <span className="sub-total">
+              {report.now.tempC.toFixed(0)}°C · {report.now.cloudPct}% cloud
+              {report.now.isDay && ` · ${Math.round(report.now.radiation)} W/m²`}
+            </span>
+          )}
           <button
             className="icon-btn wide"
-            onClick={() => setChanging(true)}
-            title="Change location"
+            onClick={() => setPicking(true)}
+            title={report ? "Change location" : "Set a location"}
           >
             <IconPin size={14} />
-            Change
+            {report ? "Change" : "Set location"}
           </button>
         </div>
       </div>
 
-      <div className="days">
-        {report.days.map((d, i) => (
-          <div className={`day ${i === 0 ? "is-today" : ""}`} key={d.date}>
-            <div className="day-name">{dayName(d.date, i)}</div>
-            <div className="day-bar-track">
-              <div
-                className="day-bar"
-                style={{ height: `${Math.max(4, (d.solarKwhM2 / peak) * 100)}%` }}
-                title={`${d.solarKwhM2} kWh/m²`}
-              />
-            </div>
-            <div className="day-sun">{d.solarKwhM2.toFixed(1)}</div>
-            <div className="day-temp">
-              {Math.round(d.tempMax)}° <span className="muted">{Math.round(d.tempMin)}°</span>
-            </div>
-            <div className={`day-rain ${d.precipPct >= 40 ? "wet" : ""}`}>
-              <IconDrop size={11} /> {d.precipPct}%
-            </div>
-          </div>
-        ))}
-      </div>
+      {error && (
+        <div className="msg err" style={{ marginTop: 0, marginBottom: 14 }}>
+          Could not reach the forecast service. {error}
+        </div>
+      )}
 
-      <div className="advice">
-        <span className="advice-ico">
-          {report.days[1] && report.days[1].solarKwhM2 >= 3 ? <IconSun size={16} /> : <IconCloud size={16} />}
-        </span>
-        <p>{report.advice}</p>
-      </div>
+      {!report ? (
+        <div className="empty">
+          {needsLocation
+            ? "No location set yet. Add one to forecast solar yield for the days ahead."
+            : error
+              ? "No forecast to show."
+              : "Loading forecast…"}
+        </div>
+      ) : (
+        <>
+          <div className="days">
+            {report.days.map((d, i) => (
+              <div className={`day ${i === 0 ? "is-today" : ""}`} key={d.date}>
+                <div className="day-name">{dayName(d.date, i)}</div>
+                <div className="day-bar-track">
+                  <div
+                    className="day-bar"
+                    style={{ height: `${Math.max(4, (d.solarKwhM2 / peak) * 100)}%` }}
+                    title={`${d.solarKwhM2} kWh/m²`}
+                  />
+                </div>
+                <div className="day-sun">{d.solarKwhM2.toFixed(1)}</div>
+                <div className="day-temp">
+                  {Math.round(d.tempMax)}° <span className="muted">{Math.round(d.tempMin)}°</span>
+                </div>
+                <div className={`day-rain ${d.precipPct >= 40 ? "wet" : ""}`}>
+                  <IconDrop size={11} /> {d.precipPct}%
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="advice">
+            <span className="advice-ico">
+              {report.days[1] && report.days[1].solarKwhM2 >= 3 ? <IconSun size={16} /> : <IconCloud size={16} />}
+            </span>
+            <p>{report.advice}</p>
+          </div>
+        </>
+      )}
+
+      <Modal open={picking} title="Forecast location" onClose={() => setPicking(false)}>
+        <LocationPicker
+          onPicked={(r) => {
+            adopt(r);
+            setPicking(false);
+          }}
+        />
+      </Modal>
     </>
   );
 }
