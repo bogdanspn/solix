@@ -1,0 +1,20 @@
+node_modules/
+dist/
+
+# Runtime state, and all of it is personal: the history database, the socket
+# names keyed by serial, and the saved forecast location (your coordinates).
+# .env holds device addresses. None of this belongs in the repo; `npm run
+# probe` regenerates .env on a fresh machine.
+data/
+.env
+
+# Local screenshots from `npm run shot`
+shot-*.png
+scratch-*.png
+
+# Editor-local settings
+.vscode/
+
+# Stray logs from running the server in a shell
+server.log
+server.err

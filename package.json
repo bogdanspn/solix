@@ -1,0 +1,46 @@
+{
+  "name": "solix-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web dashboard for Anker Solix Solarbank 4 via Modbus TCP",
+  "scripts": {
+    "probe": "tsx scripts/probe.ts",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "build": "vite build",
+    "start": "npm run build && tsx server/index.ts",
+    "shot": "tsx scripts/shot.ts",
+    "rescan": "tsx scripts/probe.ts",
+    "explore": "tsx scripts/explore.ts",
+    "check-flow": "tsx scripts/check-flow.ts",
+    "poll-timing": "tsx scripts/poll-timing.ts",
+    "learn-modes": "tsx scripts/learn-modes.ts",
+    "check-eta": "tsx scripts/check-eta.ts"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@types/three": "^0.185.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "modbus-serial": "^8.0.21",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "playwright": "^1.62.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
