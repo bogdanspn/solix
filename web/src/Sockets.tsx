@@ -84,6 +84,7 @@ This cuts power to whatever is plugged in.`))
         <div className="card-title">
           <IconPlug size={17} />
           <h2>Sockets</h2>
+          {scanMsg && <span className="scan-msg">{scanMsg}</span>}
         </div>
         <div className="head-actions">
           <span className="sub-total">
@@ -96,8 +97,6 @@ This cuts power to whatever is plugged in.`))
           </button>
         </div>
       </div>
-
-      {scanMsg && <div className="scan-msg">{scanMsg}</div>}
 
       <div className="socket-grid">
         {sorted.map((p) => {
