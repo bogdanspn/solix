@@ -42,6 +42,36 @@ npm run explore  # read-only sweep of the register space (diagnostic)
 Open <http://localhost:8787>. It is reachable from a phone on the same network at
 your machine's LAN address, and the layout is responsive.
 
+### Developing against a deployed instance
+
+The Solarbank accepts about two concurrent Modbus consumers. A deployed
+dashboard and the phone app already use both, so a second dashboard polling the
+same device is what makes it start refusing connections to everything.
+
+So for frontend work, do not run a second poller. Point the dev server at the
+deployed one:
+
+```sh
+echo "SOLIX_API=http://homelab:8080" >> .env
+npm run dev:web          # Vite alone, no local Modbus connection at all
+```
+
+Vite prints the target it is proxying to on startup. This covers almost
+everything: layout, charts, the header scene, formatting, theming.
+
+Server work is the exception. Changing the register map, the poll loop or the
+discovery code needs the hardware, and that means being the one consumer that
+has it:
+
+```sh
+ssh homelab sudo systemctl stop solix    # hand the device over
+npm run dev                              # local server + Vite
+ssh homelab sudo systemctl start solix   # hand it back
+```
+
+History has a gap for as long as the deployed instance is stopped, so keep
+those sessions short and do the UI half of the work in the mode above.
+
 ## What it shows
 
 - **Power flow** - solar, battery, home and grid around a hub, with animated
