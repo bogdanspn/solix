@@ -340,29 +340,54 @@ function reportSigns(live: Partial<Record<string, number | string | null>>, inve
   );
 }
 
+/**
+ * Update .env in place, preserving every key this script does not own.
+ *
+ * It used to rewrite the file from a fixed list, which silently deleted
+ * anything not on that list. HTTP_HOST=127.0.0.1 was the dangerous one: the
+ * deployment guide tells you to add it, and losing it rebinds the server to
+ * every interface, putting an unauthenticated API that can write to the
+ * battery on the LAN outside the reverse proxy. SOLIX_METER, SOLIX_SUBNETS
+ * and SOLIX_API were quieter casualties of the same bug.
+ */
 function writeEnv(found: Found, invertBattery: boolean | null, plugHosts: string[]) {
   const envPath = path.join(ROOT, ".env");
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
-  const keep = (k: string, fallback: string) =>
-    new RegExp("^" + k + "=(.*)$", "m").exec(existing)?.[1] ?? fallback;
+  const current = (k: string): string | null =>
+    new RegExp("^" + k + "=(.*)$", "m").exec(existing)?.[1] ?? null;
 
-  const body = [
-    "SOLIX_HOST=" + found.host,
-    "SOLIX_PORT=" + PORT,
-    "SOLIX_UNIT_ID=" + found.unitId,
-    "SOLIX_REGISTER_KIND=" + found.kind,
-    "SOLIX_INVERT_BATTERY=" +
-      (invertBattery === null ? keep("SOLIX_INVERT_BATTERY", "0") : invertBattery ? "1" : "0"),
-    "SOLIX_INVERT_GRID=" + keep("SOLIX_INVERT_GRID", "0"),
-    "SOLIX_PLUGS=" + (plugHosts.length > 0 ? plugHosts.join(",") : keep("SOLIX_PLUGS", "")),
-    "",
-    "HTTP_PORT=" + keep("HTTP_PORT", "8787"),
-    "POLL_INTERVAL_MS=" + keep("POLL_INTERVAL_MS", "5000"),
-    "PERSIST_INTERVAL_MS=" + keep("PERSIST_INTERVAL_MS", "30000"),
-    "",
-  ].join("\n");
+  const updates: Record<string, string> = {
+    SOLIX_HOST: found.host,
+    SOLIX_PORT: String(PORT),
+    SOLIX_UNIT_ID: String(found.unitId),
+    SOLIX_REGISTER_KIND: found.kind,
+    // An idle battery says nothing about the sign convention, so keep what is
+    // already there rather than asserting a guess.
+    SOLIX_INVERT_BATTERY:
+      invertBattery === null ? (current("SOLIX_INVERT_BATTERY") ?? "0") : invertBattery ? "1" : "0",
+    SOLIX_INVERT_GRID: current("SOLIX_INVERT_GRID") ?? "0",
+    SOLIX_PLUGS: plugHosts.length > 0 ? plugHosts.join(",") : (current("SOLIX_PLUGS") ?? ""),
+    HTTP_PORT: current("HTTP_PORT") ?? "8787",
+    POLL_INTERVAL_MS: current("POLL_INTERVAL_MS") ?? "5000",
+    PERSIST_INTERVAL_MS: current("PERSIST_INTERVAL_MS") ?? "30000",
+  };
 
-  fs.writeFileSync(envPath, body);
+  const pending = new Set(Object.keys(updates));
+  const lines = existing ? existing.split(/\r?\n/) : [];
+
+  // Rewrite the keys already present, in place, so comments, blank lines and
+  // unrelated settings all keep their positions.
+  const merged = lines.map((line) => {
+    const key = /^([A-Z0-9_]+)=/.exec(line)?.[1];
+    if (!key || !pending.has(key)) return line;
+    pending.delete(key);
+    return key + "=" + updates[key];
+  });
+
+  for (const key of pending) merged.push(key + "=" + updates[key]);
+
+  const text = merged.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  fs.writeFileSync(envPath, text);
   console.log("Wrote %s", envPath);
 }
 
