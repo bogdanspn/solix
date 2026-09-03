@@ -162,9 +162,19 @@ sudo a2enmod proxy proxy_http headers
 
 `/etc/apache2/sites-available/solix.conf`:
 
+Give the dashboard its own port rather than a hostname. A vhost on port 80
+only answers to the name in `ServerName`, so unless you run DNS for that name,
+browsing to the server by IP lands on whichever vhost Apache matches first,
+which is usually whatever else the box already serves. A dedicated port has no
+such ambiguity and needs nothing added to DNS: `http://<server-ip>:8080` and
+`http://homelab:8080` both work.
+
 ```apache
-<VirtualHost *:80>
-    ServerName solix.home.lan
+Listen 8080
+
+<VirtualHost *:8080>
+    # No ServerName: this vhost owns the port, so it answers on the server IP
+    # and on any name that resolves to it.
 
     ProxyPreserveHost On
     ProxyTimeout 300
@@ -197,6 +207,18 @@ sudo a2enmod proxy proxy_http headers
 </VirtualHost>
 ```
 
+If a firewall is running, open the port:
+
+```sh
+sudo ufw allow 8080/tcp     # only if ufw is active
+```
+
+To use a hostname instead of a port, keep `<VirtualHost *:80>` with a
+`ServerName`, and make that name resolve: either add it to your router or
+Pi-hole, or add `<server-ip> solix.home.lan` to `/etc/hosts` on every machine
+that will open the dashboard. That last option is why the port is the default
+here.
+
 ```sh
 sudo a2ensite solix
 sudo apache2ctl configtest
@@ -211,9 +233,9 @@ SetEnvIfNoCase Request_URI ^/api/stream$ no-gzip dont-vary
 
 ## 5. HTTPS (optional, LAN only)
 
-For a hostname resolvable only on your LAN, Let's Encrypt HTTP-01 will not
-work. Either use a DNS-01 challenge with a real domain, or a self-signed
-certificate:
+Only worth doing if you gave it a hostname. For a name resolvable only on your
+LAN, Let's Encrypt HTTP-01 will not work: either use a DNS-01 challenge with a
+real domain, or a self-signed certificate:
 
 ```sh
 sudo apt install -y ssl-cert
@@ -229,11 +251,13 @@ over TLS.
 
 ```sh
 # API reachable through Apache
-curl -s http://solix.home.lan/api/live | head -c 200
+curl -s http://localhost:8080/api/live | head -c 200
 
 # SSE actually streaming: events should appear every ~5s, not in one burst
-curl -N -s http://solix.home.lan/api/stream | head -20
+curl -N -s http://localhost:8080/api/stream | head -20
 ```
+
+Then open `http://<server-ip>:8080` from another machine on the LAN.
 
 If `curl -N` sits silent and then dumps several events at once, buffering is
 still on somewhere. Check `mod_deflate` and that the `<Location>` block is

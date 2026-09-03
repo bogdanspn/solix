@@ -7,7 +7,7 @@ import { history, peakPvW, sampleCount, todayTotals, type Range } from "./histor
 import { isWritableKey, writeSetting } from "./control.ts";
 import { OPERATING_MODE, OPERATING_MODE_LABELS } from "./registers.ts";
 import { plugHosts, setPlugHosts, setPlugName, setPlugSwitch } from "./plugs.ts";
-import { discoverPlugs, identifyMeter, persistMeterHost, persistPlugHosts } from "./discovery.ts";
+import { discoverPlugs, identifyMeter, identifyPlug, persistMeterHost, persistPlugHosts } from "./discovery.ts";
 import { setMeterHost } from "./config.ts";
 import { geocode, getWeather, loadPlace, savePlace } from "./weather.ts";
 import type { Snapshot } from "./types.ts";
@@ -122,6 +122,22 @@ app.post("/api/plugs/rescan", async (_req, res) => {
   rescanning = true;
   try {
     const found = await discoverPlugs(config.port, config.unitId, [config.host]);
+
+    /*
+     * A sweep that misses a socket must not delete it.
+     *
+     * These sockets are on WiFi and a sweep can drop one, so replacing the
+     * list with whatever the sweep returned would silently remove a working
+     * socket, stop its energy accounting and understate household
+     * consumption. Anything already known that the sweep did not return gets
+     * asked directly, and is only dropped if it truly does not answer.
+     */
+    for (const host of plugHosts()) {
+      if (found.some((p) => p.host === host)) continue;
+      const still = await identifyPlug(host, config.port, config.unitId);
+      if (still) found.push(still);
+    }
+
     const hosts = found.map((p) => p.host);
     const { added, removed } = setPlugHosts(hosts);
     persistPlugHosts(hosts);
