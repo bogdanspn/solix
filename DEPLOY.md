@@ -174,9 +174,9 @@ worth avoiding if anything else on the box might want it; pick something
 quieter and change it in all three places below.
 
 ```apache
-Listen 8080
+Listen 8087
 
-<VirtualHost *:8080>
+<VirtualHost *:8087>
     # No ServerName: this vhost owns the port, so it answers on the server IP
     # and on any name that resolves to it.
 
