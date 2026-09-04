@@ -1663,19 +1663,11 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       trunk.scale.set(1.1, 1.35, 1.1);
       trunk.position.y = 0.68;
       t.add(trunk);
-      const crownLobes = [
-        [0, 1.82, 0, 0.76, 0.82],
-        [0.3, 1.62, 0.16, 0.47, 0.46],
-        [-0.27, 1.67, -0.18, 0.43, 0.43],
-        [-0.04, 2.12, 0.04, 0.42, 0.52],
-      ];
-      for (const [lobeX, lobeY, lobeZ, width, height] of crownLobes) {
-        const crown = solidMesh(bushGeo, leafMat());
-        crown.scale.set(width, height, width * 0.92);
-        crown.position.set(lobeX, lobeY, lobeZ);
-        crown.rotation.set(Math.random() * 0.5, Math.random() * Math.PI, 0);
-        t.add(crown);
-      }
+      const crown = solidMesh(bushGeo, leafMat());
+      crown.scale.set(0.82, 0.92, 0.76);
+      crown.position.set(0, 1.78, 0);
+      crown.rotation.set(Math.random() * 0.18, Math.random() * Math.PI, 0);
+      t.add(crown);
       t.position.set(x, 0, z);
       t.scale.setScalar(scale);
       t.rotation.y = Math.random() * Math.PI;
@@ -1780,16 +1772,20 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const clearOfPlants = (x: number, z: number, r: number) =>
       taken.every(([px, pz, pr]) => Math.hypot(x - px, z - pz) > r + pr + PLANT_GAP);
 
-    // Copse centres first, kept well apart so the stands stay distinct.
-    const copses: Array<[number, number]> = [];
-    let cGuard = 0;
-    while (copses.length < 5 && cGuard++ < 400) {
-      const x = -17 + Math.random() * 29;
-      const z = -12 + Math.random() * 17;
-      if (!clearOfHouse(x, z)) continue;
-      if (copses.some(([px, pz]) => Math.hypot(x - px, z - pz) < 7)) continue;
-      copses.push([x, z]);
-    }
+    // Three stands form the rear treeline. A smaller group may come forward
+    // on the left without crossing the facade; the right foreground remains
+    // clear so it does not compete with the house or the dashboard cards.
+    const copseAreas: ReadonlyArray<readonly [number, number, number, number]> = [
+      [-11.5, -8.7, 3.5, 1.6],
+      [-2.5, -9.4, 4.1, 1.8],
+      [7.2, -7.9, 2.7, 1.45],
+      [-11.2, 3.8, 3.1, 1.25],
+      [-6.9, 4.15, 1.55, 1.05],
+    ];
+    const copses = copseAreas.map(([cx, cz, spreadX, spreadZ]) => [
+      cx + (Math.random() - 0.5) * spreadX * 2,
+      cz + (Math.random() - 0.5) * spreadZ * 2,
+    ] as [number, number]);
 
     const plant = (x: number, z: number, big: boolean) => {
       const roll = big ? Math.random() * 0.72 : 0.72 + Math.random() * 0.28;
@@ -1815,16 +1811,6 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         // Trees make the stand, undergrowth fills between them.
         if (plant(cx + Math.cos(a) * r, cz + Math.sin(a) * r, got < want - 2)) got++;
       }
-    }
-
-    // A handful of strays, so the stands do not look planted to a plan.
-    let strays = 0;
-    let sGuard = 0;
-    while (strays < 4 && sGuard++ < 200) {
-      const x = -19 + Math.random() * 33;
-      const z = -13 + Math.random() * 20;
-      if (Math.hypot(x - HOUSE_X, z - HOUSE_Z) < 8) continue;
-      if (plant(x, z, Math.random() < 0.5)) strays++;
     }
 
     // ---------------- clouds ----------------
