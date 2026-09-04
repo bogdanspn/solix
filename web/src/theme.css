@@ -100,7 +100,7 @@ body:has(.app.is-light-night) {
 .app {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 32px 22px 72px;
+  padding: 0 22px 72px;
 }
 
 /* --- header --- */
@@ -111,6 +111,7 @@ body:has(.app.is-light-night) {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  padding-top: 32px;
   margin-bottom: 44px;
 }
 
@@ -393,13 +394,6 @@ body:has(.app.is-light-night) {
   .confidence-intro {
     display: none;
   }
-}
-
-.col {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
 }
 
 @media (max-width: 940px) {
@@ -1012,6 +1006,78 @@ h2.eyebrow,
   margin-top: 26px;
 }
 
+/* ---------- readings: where today's solar went ---------- */
+
+/* The card is stretched to the flow card beside it, so the column fills it
+   and the closing block is pushed to the foot rather than leaving the tail
+   hanging empty. */
+.readings {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.destination {
+  margin-top: auto;
+  padding-top: 22px;
+}
+
+.dest-bar {
+  display: flex;
+  gap: 3px;
+  height: 10px;
+  margin-bottom: 10px;
+}
+
+.dest-seg {
+  border-radius: 5px;
+  min-width: 4px;
+}
+
+.dest-seg.is-stored,
+.dest-key i.is-stored {
+  background: var(--battery);
+}
+
+.dest-seg.is-direct,
+.dest-key i.is-direct {
+  background: var(--solar);
+}
+
+.dest-keys {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.dest-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dest-key i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.dest-key b {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.dest-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
 /* ---------- power flow ---------- */
 
 @keyframes flow {
@@ -1421,21 +1487,32 @@ h2.eyebrow,
 .days {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
+  gap: 8px;
 }
 
+/* Each day is a cell that fills its column rather than a thin bar floating in
+   the middle of one, which is what left the row looking gappy. */
 .day {
-  text-align: center;
-  padding: 8px 2px;
-  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px 9px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--glass);
+  min-width: 0;
 }
 
 .day.is-today {
-  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--hairline-strong);
+  background: var(--glass-3);
 }
 
-:root[data-theme="light"] .day.is-today {
-  background: rgba(255, 255, 255, 0.55);
+.day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
 .day-name {
@@ -1443,47 +1520,93 @@ h2.eyebrow,
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin-bottom: 8px;
 }
 
-.day-bar-track {
-  height: 64px;
+.day-ico {
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  align-items: center;
+  /* Held whether or not a code resolved, so a day without one does not let
+     its heading row collapse and stagger the run. */
+  height: 16px;
+}
+
+.day-chart {
+  height: 40px;
   margin-bottom: 7px;
 }
 
-.day-bar {
-  width: 8px;
-  border-radius: 4px;
-  background: linear-gradient(to top, var(--solar), color-mix(in srgb, var(--solar) 45%, transparent));
+.day-profile {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.day-profile-fill {
+  fill: color-mix(in srgb, var(--solar) 28%, transparent);
+}
+
+.day-profile-line {
+  fill: none;
+  stroke: var(--solar);
+  stroke-width: 1.5;
+  /* The viewBox is stretched to the cell, so a plain stroke would thin and
+     thicken with the column width. */
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+
+.day-figs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .day-sun {
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
 
-.day-temp {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-  margin-top: 3px;
+.day-sun em {
+  font-family: var(--font);
+  font-size: 9.5px;
+  font-weight: 500;
+  font-style: normal;
+  color: var(--text-muted);
+  margin-left: 3px;
 }
 
-.day-rain {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
+.day-peak {
   font-size: 10px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
-  margin-top: 4px;
+}
+
+.day-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--hairline);
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-temp {
+  color: var(--text-secondary);
+}
+
+.day-rain {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .day-rain.wet {
@@ -1698,44 +1821,38 @@ h2.soc-heading {
 /* ---------- ambient field ---------- */
 
 .house {
-  height: 640px;
+  height: 700px;
   /* Break out of the page gutter: the scene runs edge to edge rather than
      being cropped to the card column. */
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
-  /* Runs up behind the header rather than starting below it. */
-  margin-top: -118px;
-  /* Cards ride over the foot of the scene instead of clearing it. */
-  margin-bottom: -26px;
+    /* Begins at the lower edge of the header so its fade belongs to the
+      ambient field instead of washing across the controls. */
+    margin-top: -119px;
+    /* The confidence band rides over the extended ground field, so its
+      translucent surface receives the grid rather than a hard canvas edge. */
+    margin-bottom: -86px;
   position: relative;
   z-index: 0;
   overflow: hidden;
     /* A long falloff lets either night palette settle into the page rather
       than ending as a hard, isolated strip. */
-    mask-image: linear-gradient(to bottom, #000 0%, #000 86%, rgba(0, 0, 0, 0.78) 93%, rgba(0, 0, 0, 0.28) 98%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 86%, rgba(0, 0, 0, 0.78) 93%, rgba(0, 0, 0, 0.28) 98%, transparent 100%);
-}
-
-/* Keeps the title readable where the scene passes behind it. */
-.house::after {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 220px;
-  background: linear-gradient(to bottom, var(--page) 0%, color-mix(in srgb, var(--page) 86%, transparent) 28%, color-mix(in srgb, var(--page) 42%, transparent) 64%, transparent 100%);
-  pointer-events: none;
+    mask-image: linear-gradient(to bottom, #000 0%, #000 89%, rgba(0, 0, 0, 0.78) 94%, rgba(0, 0, 0, 0.28) 98%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 89%, rgba(0, 0, 0, 0.78) 94%, rgba(0, 0, 0, 0.28) 98%, transparent 100%);
 }
 
 .header {
   position: relative;
   z-index: 2;
+  background: transparent;
 }
 
 @media (max-width: 700px) {
   .house {
     height: 300px;
     margin-top: -90px;
+    margin-bottom: -26px;
   }
 
 }

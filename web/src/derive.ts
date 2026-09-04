@@ -16,3 +16,15 @@ export function mainsInputW(s: Snapshot): number | null {
   if (s.gridMeasured || s.homeSource !== "sockets") return null;
   return Math.max(0, Math.round(s.homeW - Math.abs(s.acOutW)));
 }
+
+/**
+ * AC output after the measured socket load has been accounted for.
+ *
+ * Positive means Solarbank output remains after the sockets; negative means
+ * the sockets draw more than Solarbank supplies. This is calculated in socket
+ * mode and must not replace a Smart Meter's direct grid measurement.
+ */
+export function netAcOutputW(s: Snapshot): number | null {
+  if (s.gridMeasured || s.homeSource !== "sockets") return null;
+  return Math.round(s.acOutW - s.homeW);
+}

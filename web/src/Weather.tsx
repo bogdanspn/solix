@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { Place, WeatherReport } from "../../server/weather.ts";
+import type { DayForecast, HourPoint, Place, WeatherReport } from "../../server/weather.ts";
 import { IconCloud, IconDrop, IconPin, IconSun } from "./Icons.tsx";
+import { weatherLook } from "./WeatherIcon.tsx";
 import { Modal } from "./Modal.tsx";
 
 /**
@@ -11,6 +12,74 @@ import { Modal } from "./Modal.tsx";
  * what actually predicts PV yield, since it already folds in sun angle, day
  * length and haze.
  */
+
+/**
+ * The condition to show against a day, picked from its daylight hours.
+ *
+ * DayForecast carries no weather code, only the aggregates, so it comes from
+ * the hourly series. The most frequent daylight code rather than the worst:
+ * one thunderstorm hour in a bright day is not what the day looks like, and
+ * the precipitation figure already carries the warning.
+ */
+function dayCode(hours: HourPoint[]): number | null {
+  const tally = new Map<number, number>();
+  for (const h of hours) {
+    if (!h.isDay) continue;
+    tally.set(h.code, (tally.get(h.code) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  let bestN = 0;
+  for (const [code, n] of tally) {
+    // Ties go to the higher code, which is the more significant weather.
+    if (n > bestN || (n === bestN && best !== null && code > best)) {
+      best = code;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * The day's irradiance hour by hour, as a filled curve.
+ *
+ * A single bar per day answers "how much" and leaves a wide cell mostly
+ * empty. The shape answers "when", which is the question that actually
+ * changes what you do: a morning-weighted day and an afternoon-weighted one
+ * can carry the same kWh and want opposite plans for running the washing.
+ *
+ * Scaled against the peak across the whole window, not each day's own, so the
+ * seven curves are comparable at a glance.
+ */
+function DayProfile({ hours, peak }: { hours: HourPoint[]; peak: number }) {
+  const W = 100;
+  const H = 40;
+  if (hours.length < 2) return <svg className="day-profile" viewBox={`0 0 ${W} ${H}`} />;
+
+  const x = (i: number) => (i / (hours.length - 1)) * W;
+  const y = (r: number) => H - Math.min(r / peak, 1) * (H - 2);
+  const line = hours.map((h, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(2)} ${y(h.radiation).toFixed(2)}`).join(" ");
+
+  return (
+    <svg className="day-profile" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden>
+      <path d={`${line} L ${W} ${H} L 0 ${H} Z`} className="day-profile-fill" />
+      <path d={line} className="day-profile-line" />
+    </svg>
+  );
+}
+
+/** Local clock for an hourly sample, e.g. the peak-irradiance hour. */
+function clockOf(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Hours of daylight, from the day's own sunrise and sunset. */
+function daylight(d: DayForecast): string {
+  const rise = new Date(d.sunrise).getTime();
+  const set = new Date(d.sunset).getTime();
+  if (!Number.isFinite(rise) || !Number.isFinite(set) || set <= rise) return "";
+  const mins = Math.round((set - rise) / 60000);
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+}
 
 function dayName(date: string, index: number): string {
   if (index === 0) return "Today";
@@ -150,6 +219,16 @@ export function Weather({
   const [picking, setPicking] = useState(false);
 
   const peak = report ? Math.max(...report.days.map((d) => d.solarKwhM2), 0.1) : 1;
+  // Bucketed once here rather than filtered per day inside the map, which
+  // would walk all 168 hours seven times over on every render.
+  const byDate = new Map<string, HourPoint[]>();
+  for (const h of report?.hours ?? []) {
+    const key = new Date(h.ts).toLocaleDateString("sv");
+    const list = byDate.get(key);
+    if (list) list.push(h);
+    else byDate.set(key, [h]);
+  }
+  const peakRadiation = Math.max(...(report?.hours ?? []).map((h) => h.radiation), 100);
   const tomorrow = report?.days[1];
   const strategy = !tomorrow
     ? null
@@ -214,25 +293,59 @@ export function Weather({
             </div>
           )}
           <div className="days">
-            {report.days.map((d, i) => (
-              <div className={`day ${i === 0 ? "is-today" : ""}`} key={d.date}>
-                <div className="day-name">{dayName(d.date, i)}</div>
-                <div className="day-bar-track">
-                  <div
-                    className="day-bar"
-                    style={{ height: `${Math.max(4, (d.solarKwhM2 / peak) * 100)}%` }}
-                    title={`${d.solarKwhM2} kWh/m²`}
-                  />
-                </div>
-                <div className="day-sun">{d.solarKwhM2.toFixed(1)}</div>
-                <div className="day-temp">
-                  {Math.round(d.tempMax)}° <span className="muted">{Math.round(d.tempMin)}°</span>
-                </div>
-                <div className={`day-rain ${d.precipPct >= 40 ? "wet" : ""}`}>
-                  <IconDrop size={11} /> {d.precipPct}%
-                </div>
-              </div>
-            ))}
+            {report.days.map((d, i) => {
+              const hours = byDate.get(d.date) ?? [];
+                const code = dayCode(hours);
+                const look = code === null ? null : weatherLook(code, true);
+                const best = hours.reduce(
+                  (acc, h) => (h.radiation > acc.radiation ? h : acc),
+                  hours[0] ?? { radiation: 0, ts: 0 },
+                );
+                return (
+                  <div className={`day ${i === 0 ? "is-today" : ""}`} key={d.date}>
+                    <div className="day-head">
+                      <span className="day-name">{dayName(d.date, i)}</span>
+                      {look && (
+                        <span className="day-ico" style={{ color: look.tone }} title={look.label}>
+                          <look.Icon size={16} />
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      className="day-chart"
+                      style={{ opacity: 0.35 + (d.solarKwhM2 / peak) * 0.65 }}
+                      title={`${d.solarKwhM2} kWh/m² over the day`}
+                    >
+                      <DayProfile hours={hours} peak={peakRadiation} />
+                    </div>
+
+                    <div className="day-figs">
+                      <span className="day-sun">
+                        {d.solarKwhM2.toFixed(1)}
+                        <em>kWh/m²</em>
+                      </span>
+                      {best.radiation > 0 && (
+                        <span className="day-peak" title="Strongest hour of the day">
+                          {Math.round(best.radiation)} W/m² at {clockOf(best.ts)}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="day-meta">
+                      <span className="day-temp">
+                        {Math.round(d.tempMax)}° <span className="muted">{Math.round(d.tempMin)}°</span>
+                      </span>
+                      <span className={`day-rain ${d.precipPct >= 40 ? "wet" : ""}`}>
+                        <IconDrop size={10} /> {d.precipPct}%
+                      </span>
+                      <span className="day-light" title="Sunrise to sunset">
+                        {daylight(d)}
+                      </span>
+                    </div>
+                  </div>
+              );
+            })}
           </div>
 
           <div className="advice">

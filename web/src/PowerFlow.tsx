@@ -12,17 +12,26 @@ import { IconBattery, IconGrid, IconHome, IconSun } from "./Icons.tsx";
  */
 
 const W = 640;
-const H = 700;
+const H = 600;
 const CX = W / 2;
-const CY = 350;
+const CY = 430;
 
-const HUB_R = 96;
-const NODE_R = 56;
-const ORBIT = 242;
+const HUB_R = 112;
+const NODE_R = 64;
+const ORBIT = 205;
 
 const SUPPLY_Y = CY - 292;
-const SUPPLY_DX = 78;
-const JUNCTION_Y = (SUPPLY_Y + NODE_R + 10 + (CY - HUB_R - 10)) / 2;
+const SUPPLY_DX = 92;
+/** Half way between the hub and the supply row, and drawn in closer. */
+const SIDE_Y = (SUPPLY_Y + CY) / 2;
+const SIDE_LEFT = { x: CX - ORBIT, y: SIDE_Y };
+const SIDE_RIGHT = { x: CX + ORBIT, y: SIDE_Y };
+/** Height of the horizontal run into the hub's flank. */
+const SIDE_ENTRY_Y = CY + 10;
+/** Where the supply branches turn inward, between node and hub. */
+const SUPPLY_TURN_Y = CY - HUB_R - 62;
+/** Half the gap between the two stubs entering the top of the hub. */
+const STEM_DX = 16;
 
 const NODES = {
   solar: { angle: -90, label: "Solar", color: "var(--solar)", Icon: IconSun },
@@ -45,6 +54,40 @@ interface Link {
   watts: number;
   /** true when energy moves from the node into the hub. */
   inbound: boolean;
+  at?: { x: number; y: number };
+  curved?: boolean;
+}
+
+/**
+ * An orthogonal run: straight segments joined by quarter-round corners.
+ *
+ * Each corner is a quadratic with the corner itself as the control point,
+ * which reads as a true fillet on a right angle. The radius is clamped to
+ * half the shorter of the two runs meeting there, so a tight pair of turns
+ * cannot overshoot into one another.
+ */
+function elbow(points: Array<[number, number]>, radius = 22): string {
+  // Collapsed segments would divide by zero when a branch happens to be
+  // straight - which is exactly the unpaired supply case.
+  const pts = points.filter(
+    (p, i) => i === 0 || Math.hypot(p[0] - points[i - 1]![0], p[1] - points[i - 1]![1]) > 0.01,
+  );
+  if (pts.length < 2) return "";
+
+  let d = `M ${pts[0]![0]} ${pts[0]![1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1]!;
+    const [cx, cy] = pts[i]!;
+    const [nx, ny] = pts[i + 1]!;
+    const inLen = Math.hypot(cx - px, cy - py);
+    const outLen = Math.hypot(nx - cx, ny - cy);
+    const r = Math.min(radius, inLen / 2, outLen / 2);
+    d +=
+      ` L ${cx + ((px - cx) / inLen) * r} ${cy + ((py - cy) / inLen) * r}` +
+      ` Q ${cx} ${cy} ${cx + ((nx - cx) / outLen) * r} ${cy + ((ny - cy) / outLen) * r}`;
+  }
+  const last = pts[pts.length - 1]!;
+  return `${d} L ${last[0]} ${last[1]}`;
 }
 
 /**
@@ -88,13 +131,21 @@ function Wire({
 
 function LinkPath({ link }: { link: Link }) {
   const node = NODES[link.node];
+  const at = link.at ?? pos(node.angle);
   const rad = (node.angle * Math.PI) / 180;
   const ux = Math.cos(rad);
   const uy = Math.sin(rad);
 
-  const d =
-    `M ${CX + ux * (HUB_R + 10)} ${CY + uy * (HUB_R + 10)} ` +
-    `L ${CX + ux * (ORBIT - NODE_R - 10)} ${CY + uy * (ORBIT - NODE_R - 10)}`;
+  // Out of the hub's flank, along, then a single turn up to the node's foot.
+  const side = at.x < CX ? -1 : 1;
+  const d = link.curved
+    ? elbow([
+        [CX + side * (HUB_R + 8), SIDE_ENTRY_Y],
+        [at.x, SIDE_ENTRY_Y],
+        [at.x, at.y + NODE_R + 8],
+      ])
+    : `M ${CX + ux * (HUB_R + 10)} ${CY + uy * (HUB_R + 10)} ` +
+      `L ${CX + ux * (ORBIT - NODE_R - 10)} ${CY + uy * (ORBIT - NODE_R - 10)}`;
 
   // The path runs hub -> node, so an inbound flow plays it backwards.
   return <Wire d={d} color={node.color} watts={link.watts} reverse={link.inbound} />;
@@ -179,26 +230,22 @@ function AcInterfaces({ solarW, inputW }: { solarW: number; inputW: number | nul
   const paired = inputW !== null;
   const solarAt = { x: paired ? CX - SUPPLY_DX : CX, y: SUPPLY_Y };
   const inputAt = { x: CX + SUPPLY_DX, y: SUPPLY_Y };
-  const branch = (from: { x: number; y: number }) => {
-    const y0 = from.y + NODE_R + 10;
-    const drop = JUNCTION_Y - y0;
-    return (
-      `M ${from.x} ${y0} ` +
-      `C ${from.x} ${y0 + drop * 0.55}, ${CX} ${JUNCTION_Y - drop * 0.5}, ${CX} ${JUNCTION_Y}`
-    );
-  };
-  const total = solarW + (inputW ?? 0);
-  const stemColor = (inputW ?? 0) > solarW ? NODES.acin.color : NODES.solar.color;
+  // Each branch drops, turns inward, and drops again into the top of the hub,
+  // so the two arrive as a parallel pair. They used to merge into one stem,
+  // which meant a shared wire that could only be one colour and one speed;
+  // kept apart, each carries its own flow the whole way in.
+  const branch = (from: { x: number; y: number }, side: number) =>
+    elbow([
+      [from.x, from.y + NODE_R + 8],
+      [from.x, SUPPLY_TURN_Y],
+      [CX + side * STEM_DX, SUPPLY_TURN_Y],
+      [CX + side * STEM_DX, CY - HUB_R - 6],
+    ]);
 
   return (
     <g>
-      <Wire d={branch(solarAt)} color={NODES.solar.color} watts={solarW} />
-      {paired && <Wire d={branch(inputAt)} color={NODES.acin.color} watts={inputW} />}
-      <Wire
-        d={`M ${CX} ${JUNCTION_Y} L ${CX} ${CY - HUB_R - 10}`}
-        color={stemColor}
-        watts={total}
-      />
+      <Wire d={branch(solarAt, paired ? -1 : 0)} color={NODES.solar.color} watts={solarW} />
+      {paired && <Wire d={branch(inputAt, 1)} color={NODES.acin.color} watts={inputW} />}
       <Node nodeKey="solar" watts={solarW} at={solarAt} />
       {paired && <Node nodeKey="acin" watts={inputW} at={inputAt} />}
     </g>
@@ -224,15 +271,11 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
   const fromMains = mainsInputW(snapshot);
 
   const links: Link[] = [
-    // batteryW > 0 is charging, i.e. hub -> battery.
-    { node: "battery", watts: batteryW, inbound: batteryW < 0 },
-      ...(gridMeasured
-        ? [
-            { node: "solar" as const, watts: solarTotal, inbound: true },
-            { node: "grid" as const, watts: gridW, inbound: gridW > 0 },
-          ]
-        : [{ node: "acout" as const, watts: snapshot.acOutW, inbound: false }]),
-    { node: "home", watts: homeKnown ? homeW : 0, inbound: false },
+    // Solar lives in the supply row in both modes, so it is not a link here.
+    ...(gridMeasured
+      ? [{ node: "grid" as const, watts: gridW, inbound: gridW > 0, at: SIDE_LEFT, curved: true }]
+      : [{ node: "acout" as const, watts: snapshot.acOutW, inbound: false, at: SIDE_LEFT, curved: true }]),
+    { node: "home", watts: homeKnown ? homeW : 0, inbound: false, at: SIDE_RIGHT, curved: true },
   ];
 
   return (
@@ -261,7 +304,7 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
         </defs>
         <circle cx={CX} cy={CY} r={ORBIT} fill="url(#hub-glow)" />
 
-        {!gridMeasured && <AcInterfaces solarW={solarTotal} inputW={fromMains} />}
+        <AcInterfaces solarW={solarTotal} inputW={fromMains} />
         {links.map((l) => (
           <LinkPath key={l.node} link={l} />
         ))}
@@ -269,39 +312,46 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
         <circle cx={CX} cy={CY} r={HUB_R} fill="var(--node-fill)" stroke="var(--hairline)" strokeWidth={1} />
         <Ticks soc={soc} />
 
-        <text x={CX} y={CY - 10} textAnchor="middle" className="hub-value" fill="var(--text-primary)">
+        <g style={{ color: "var(--battery)" }}>
+          <IconBattery size={16} x={CX - 8} y={CY - 81} />
+        </g>
+        <text x={CX} y={CY - 47} textAnchor="middle" className="hub-system" fill="var(--text-muted)">
+          SOLARBANK
+        </text>
+        <text x={CX} y={CY} textAnchor="middle" className="hub-value" fill="var(--text-primary)">
           {soc}
           <tspan className="hub-unit" fill="var(--text-muted)">
             %
           </tspan>
         </text>
-        <text x={CX} y={CY + 14} textAnchor="middle" className="hub-sub" fill="var(--text-secondary)">
+        <text x={CX} y={CY + 27} textAnchor="middle" className="hub-sub" fill="var(--text-secondary)">
           {formatKwh(storedKwh)}
         </text>
-        <text x={CX} y={CY + 31} textAnchor="middle" className="hub-status" fill="var(--text-muted)">
-          {batteryStatus}
-        </text>
-        <text x={CX} y={CY - 48} textAnchor="middle" className="hub-system" fill="var(--text-muted)">
-          SOLARBANK
+        <text x={CX} y={CY + 47} textAnchor="middle" className="hub-status" fill="var(--text-muted)">
+          {batteryStatus} · {formatW(Math.abs(batteryW))}
         </text>
         {etaText && (
-          <text x={CX} y={CY + 48} textAnchor="middle" className="hub-eta" fill="var(--text-muted)">
+          <text x={CX} y={CY + 69} textAnchor="middle" className="hub-eta" fill="var(--text-muted)">
             {etaText}
           </text>
         )}
 
-        {gridMeasured && <Node nodeKey="solar" watts={solarTotal} />}
         {gridMeasured ? (
-          <Node nodeKey="grid" watts={gridW} sub={gridW >= 0 ? "Smart Meter · import" : "Smart Meter · export"} />
+          <Node
+            nodeKey="grid"
+            watts={gridW}
+            sub={gridW >= 0 ? "Smart Meter · import" : "Smart Meter · export"}
+            at={SIDE_LEFT}
+          />
         ) : (
-          <Node nodeKey="acout" watts={snapshot.acOutW} />
+          <Node nodeKey="acout" watts={snapshot.acOutW} at={SIDE_LEFT} />
         )}
         <Node
           nodeKey="home"
           watts={homeKnown ? homeW : null}
           sub={homeSource === "sockets" ? "sockets" : homeSource === "meter" ? "metered" : "no meter"}
+          at={SIDE_RIGHT}
         />
-        <Node nodeKey="battery" watts={batteryW} sub={batteryStatus} />
       </svg>
     </div>
   );

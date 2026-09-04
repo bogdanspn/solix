@@ -8,7 +8,7 @@ import {
   IconThermometer,
   IconWave,
 } from "./Icons.tsx";
-import { mainsInputW } from "./derive.ts";
+import { netAcOutputW } from "./derive.ts";
 import { formatW } from "./format.ts";
 
 function split(w: number): [string, string] {
@@ -95,11 +95,20 @@ export function Readings({
   const [homeV, homeU] = split(snapshot.homeW);
   const [gridV, gridU] = split(snapshot.gridW);
   const homeKnown = snapshot.homeSource !== "none";
-  const mains = mainsInputW(snapshot);
-  const [mainsV, mainsU] = split(mains ?? 0);
+  const netAc = netAcOutputW(snapshot);
+  const [netAcV, netAcU] = split(netAc ?? 0);
+
+  const pv = today.pvKwh;
+  const charge = today.chargeKwh;
+  // Charging beyond what the array made can only have come off the mains, so
+  // the stored figure is clamped and the excess named rather than folded in.
+  const stored = Math.min(charge, pv);
+  const direct = Math.max(0, pv - charge);
+  const fromGrid = Math.max(0, charge - pv);
+  const socketsKwh = snapshot.plugs.reduce((sum, p) => sum + p.todayKwh, 0);
 
   return (
-    <>
+    <div className="readings">
       <h2 className="eyebrow">Right now</h2>
 
       <div className="rows">
@@ -126,24 +135,24 @@ export function Readings({
               ? snapshot.gridW >= 0
                 ? "Grid import"
                 : "Grid export"
-              : "AC output"
+              : "Solarbank AC output"
           }
-          value={gridV}
-          unit={gridU}
+          value={snapshot.gridMeasured ? gridV : split(snapshot.acOutW)[0]}
+          unit={snapshot.gridMeasured ? gridU : split(snapshot.acOutW)[1]}
           title={
             snapshot.gridMeasured
               ? undefined
-              : "Without a Smart Meter this is not a grid reading. It mirrors the AC output: what the Solarbank sends to the house, not what crosses the meter."
+              : "Raw Solarbank AC output. With socket compensation enabled, it includes measured socket use and is not a direct grid reading."
           }
         />
-        {mains !== null && (
+        {netAc !== null && (
           <Row
             icon={<IconGrid size={17} />}
             color="var(--grid-series)"
-            label="AC input"
-            value={mainsV}
-            unit={mainsU}
-            title="House load the Solarbank is not covering, so it comes off the mains. At the discharge floor that is the whole of it."
+            label={netAc >= 0 ? "Net AC output" : "Net AC input"}
+            value={netAcV}
+            unit={netAcU}
+            title="Calculated as Solarbank AC output minus the measured socket load. A Smart Meter replaces this estimate with direct grid flow."
           />
         )}
       </div>
@@ -187,6 +196,43 @@ export function Readings({
           />
         )}
       </div>
-    </>
+
+      {pv > 0.05 && (
+        <div className="destination">
+          <h2 className="eyebrow">Where today&rsquo;s solar went</h2>
+          <div className="dest-bar">
+            {stored > 0 && (
+              <span
+                className="dest-seg is-stored"
+                style={{ flexGrow: stored }}
+                title={`${stored.toFixed(1)} kWh charged into the battery`}
+              />
+            )}
+            {direct > 0 && (
+              <span
+                className="dest-seg is-direct"
+                style={{ flexGrow: direct }}
+                title={`${direct.toFixed(1)} kWh generated but not stored`}
+              />
+            )}
+          </div>
+          <div className="dest-keys">
+            <span className="dest-key">
+              <i className="is-stored" />
+              Stored <b>{stored.toFixed(1)}</b> kWh
+            </span>
+            <span className="dest-key">
+              <i className="is-direct" />
+              Not stored <b>{direct.toFixed(1)}</b> kWh
+            </span>
+          </div>
+          <p className="dest-note">
+            {fromGrid > 0.05
+              ? `A further ${fromGrid.toFixed(1)} kWh went into the battery from the mains: charging exceeded what the array made.`
+              : `Not stored means it went to the house or was left on the table. Sockets measured ${socketsKwh.toFixed(1)} kWh today.`}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

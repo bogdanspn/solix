@@ -7,7 +7,7 @@ import { SettingsPanel } from "./SettingsPanel.tsx";
 import { Sockets } from "./Sockets.tsx";
 import { Strings } from "./Strings.tsx";
 import { Weather, useWeather } from "./Weather.tsx";
-import { mainsInputW } from "./derive.ts";
+import { mainsInputW, netAcOutputW } from "./derive.ts";
 import { formatClock, formatDuration, formatW } from "./format.ts";
 import { IconBolt, IconMoon, IconSettings, IconSun } from "./Icons.tsx";
 import { weatherLook } from "./WeatherIcon.tsx";
@@ -37,9 +37,12 @@ function ConfidenceBand({ snapshot }: { snapshot: Snapshot }) {
             tone: "warn",
           }
         : { label: "Household demand", value: "Not measured", detail: "Add a meter or sockets", tone: "critical" };
+  const netAc = netAcOutputW(snapshot);
   const grid = snapshot.gridMeasured
     ? { value: "Grid measured", detail: "Import and export are live", tone: "good" }
-    : { value: "AC output only", detail: "Grid flow needs a Smart Meter", tone: "warn" };
+    : netAc !== null
+      ? { value: "AC net calculated", detail: "AC output minus socket use", tone: "warn" }
+      : { value: "AC output only", detail: "Grid flow needs a Smart Meter", tone: "warn" };
   const freshness = snapshot.online && snapshot.staleSeconds <= 20
     ? { value: "Live", detail: "Reading every 5 seconds", tone: "good" }
     : { value: "Last known reading", detail: `${snapshot.staleSeconds}s old`, tone: "critical" };
@@ -245,6 +248,7 @@ export function App() {
             peakSolarW: info?.peakPvW || 2500,
             homeW: snapshot.homeSource === "none" ? 0 : snapshot.homeW,
             mainsW: snapshot.gridMeasured ? Math.max(snapshot.gridW, 0) : (mainsInputW(snapshot) ?? 0),
+            netAcW: netAcOutputW(snapshot),
             gridMeasured: snapshot.gridMeasured,
             packs: info?.device.packs ?? 1,
           }}
@@ -272,14 +276,13 @@ export function App() {
           <p className="footnote">{footnote(snapshot)}</p>
         </section>
 
-        <div className="col">
-          <section className="card">
-            <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} />
-          </section>
-          <section className="card">
-            <Weather {...weather} onReviewSettings={() => setSettingsOpen(true)} />
-          </section>
-        </div>
+        <section className="card">
+          <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} />
+        </section>
+
+        <section className="card span-2">
+          <Weather {...weather} onReviewSettings={() => setSettingsOpen(true)} />
+        </section>
 
         <section className="card span-2">
           <Sockets plugs={snapshot.plugs} onRenamed={refresh} />
@@ -322,6 +325,10 @@ function footnote(s: Snapshot): string {
     return `At the current draw the battery reaches its ${s.eta.targetSoc}% floor in ${formatDuration(s.eta.minutes)}.`;
   }
   const mainsEstimate = mainsInputW(s);
+  const netAc = netAcOutputW(s);
+  if (netAc !== null) {
+    return `${formatW(Math.abs(netAc))} net AC ${netAc >= 0 ? "output" : "input"} after socket use. This is calculated from Solarbank AC output minus the measured sockets, not a Smart Meter reading.`;
+  }
   if (mainsEstimate !== null && mainsEstimate > 0) {
     return `${formatW(mainsEstimate)} of the socket-measured demand is not supplied by the Solarbank. This is a calculated mains estimate, not a grid reading.`;
   }
