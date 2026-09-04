@@ -8,6 +8,7 @@ import { SettingsPanel } from "./SettingsPanel.tsx";
 import { Sockets } from "./Sockets.tsx";
 import { Strings } from "./Strings.tsx";
 import { Weather, useWeather } from "./Weather.tsx";
+import { mainsInputW } from "./derive.ts";
 import { formatClock, formatDuration, formatW } from "./format.ts";
 import { IconBolt, IconMoon, IconSettings, IconSun } from "./Icons.tsx";
 import { weatherLook } from "./WeatherIcon.tsx";
@@ -192,6 +193,9 @@ export function App() {
           // The largest PV actually recorded, so the panel glow is scaled
           // against this array rather than an unrelated register.
           peakSolarW: info?.peakPvW || 2500,
+          homeW: snapshot.homeSource === "none" ? 0 : snapshot.homeW,
+          mainsW: mainsInputW(snapshot) ?? 0,
+          packs: info?.device.packs ?? 1,
         }}
         weather={
           weather.report

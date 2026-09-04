@@ -1,4 +1,5 @@
 import type { Snapshot } from "../../server/types.ts";
+import { mainsInputW } from "./derive.ts";
 import { formatDuration, formatKwh, formatW } from "./format.ts";
 import { IconBattery, IconGrid, IconHome, IconSun } from "./Icons.tsx";
 
@@ -11,16 +12,30 @@ import { IconBattery, IconGrid, IconHome, IconSun } from "./Icons.tsx";
  */
 
 const W = 640;
-const H = 620;
+const H = 700;
 const CX = W / 2;
-const CY = H / 2;
+const CY = 350;
 
 const HUB_R = 96;
 const NODE_R = 56;
 const ORBIT = 242;
 
+/**
+ * The supply row sits above the cross rather than on it.
+ *
+ * Solar and the mains are two sources of the same thing, so they share a row,
+ * stay centred as a block on the hub, and merge into one stem before they
+ * reach it. A Smart Meter, when there is one to read, joins the same row
+ * without the rest of the diagram moving.
+ */
+const SUPPLY_Y = CY - 292;
+const SUPPLY_DX = 78;
+/** Half way between the foot of the supply row and the top of the hub. */
+const JUNCTION_Y = (SUPPLY_Y + NODE_R + 10 + (CY - HUB_R - 10)) / 2;
+
 const NODES = {
   solar: { angle: -90, label: "Solar", color: "var(--solar)", Icon: IconSun },
+  acin: { angle: -90, label: "AC input", color: "var(--grid-series)", Icon: IconGrid },
   home: { angle: 0, label: "Home", color: "var(--home)", Icon: IconHome },
   battery: { angle: 90, label: "Battery", color: "var(--battery)", Icon: IconBattery },
   grid: { angle: 180, label: "Grid", color: "var(--grid-series)", Icon: IconGrid },
@@ -40,21 +55,26 @@ interface Link {
   inbound: boolean;
 }
 
-function LinkPath({ link }: { link: Link }) {
-  const node = NODES[link.node];
-  const active = Math.abs(link.watts) >= 5;
-  const rad = (node.angle * Math.PI) / 180;
-  const ux = Math.cos(rad);
-  const uy = Math.sin(rad);
-
-  const x1 = CX + ux * (HUB_R + 10);
-  const y1 = CY + uy * (HUB_R + 10);
-  const x2 = CX + ux * (ORBIT - NODE_R - 10);
-  const y2 = CY + uy * (ORBIT - NODE_R - 10);
-  const d = `M ${x1} ${y1} L ${x2} ${y2}`;
-
+/**
+ * A run of wire: the dim track it follows, and the dashes that move along it
+ * when something is flowing. Direction rides in the animation shorthand -
+ * setting animationDirection beside it is React's "conflicting property"
+ * warning, and the two can be applied in either order on a rerender.
+ */
+function Wire({
+  d,
+  color,
+  watts,
+  reverse = false,
+}: {
+  d: string;
+  color: string;
+  watts: number;
+  reverse?: boolean;
+}) {
+  const active = Math.abs(watts) >= 5;
   // 1500 W saturates the speed scale; below that faster flow reads as faster.
-  const speed = active ? Math.max(0.65, 2.3 - (Math.abs(link.watts) / 1500) * 1.7) : 0;
+  const speed = Math.max(0.65, 2.3 - (Math.abs(watts) / 1500) * 1.7);
 
   return (
     <g>
@@ -62,24 +82,45 @@ function LinkPath({ link }: { link: Link }) {
       {active && (
         <path
           d={d}
-          stroke={node.color}
+          stroke={color}
           strokeWidth={2.5}
           fill="none"
           strokeLinecap="round"
           strokeDasharray="5 13"
-          style={{
-            animation: `flow ${speed}s linear infinite`,
-            animationDirection: link.inbound ? "reverse" : "normal",
-          }}
+          style={{ animation: `flow ${speed}s linear infinite ${reverse ? "reverse" : "normal"}` }}
         />
       )}
     </g>
   );
 }
 
-function Node({ nodeKey, watts, sub }: { nodeKey: NodeKey; watts: number | null; sub?: string }) {
+function LinkPath({ link }: { link: Link }) {
+  const node = NODES[link.node];
+  const rad = (node.angle * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+
+  const d =
+    `M ${CX + ux * (HUB_R + 10)} ${CY + uy * (HUB_R + 10)} ` +
+    `L ${CX + ux * (ORBIT - NODE_R - 10)} ${CY + uy * (ORBIT - NODE_R - 10)}`;
+
+  // The path runs hub -> node, so an inbound flow plays it backwards.
+  return <Wire d={d} color={node.color} watts={link.watts} reverse={link.inbound} />;
+}
+
+function Node({
+  nodeKey,
+  watts,
+  sub,
+  at,
+}: {
+  nodeKey: NodeKey;
+  watts: number | null;
+  sub?: string;
+  at?: { x: number; y: number };
+}) {
   const node = NODES[nodeKey];
-  const { x, y } = pos(node.angle);
+  const { x, y } = at ?? pos(node.angle);
   const active = watts !== null && Math.abs(watts) >= 5;
   const { Icon } = node;
 
@@ -137,6 +178,49 @@ function Ticks({ soc }: { soc: number }) {
   );
 }
 
+/**
+ * The supply row: solar, the mains, and the single stem they merge into.
+ *
+ * Each branch carries its own dashes, so the movement starts at whichever
+ * source is actually delivering - solar by day, the mains once the battery is
+ * at its floor - and the stem below the junction carries the sum.
+ */
+function Supply({ solarW, mainsW }: { solarW: number; mainsW: number | null }) {
+  const paired = mainsW !== null;
+  const solarAt = { x: paired ? CX - SUPPLY_DX : CX, y: SUPPLY_Y };
+  const mainsAt = { x: CX + SUPPLY_DX, y: SUPPLY_Y };
+
+  // Both branches leave their node heading straight down and arrive at the
+  // junction heading straight down too, so they meet the stem tangentially
+  // rather than kinking into it. Unpaired, the control points collapse onto
+  // the centreline and this is simply a straight spoke.
+  const branch = (from: { x: number; y: number }) => {
+    const y0 = from.y + NODE_R + 10;
+    const drop = JUNCTION_Y - y0;
+    return (
+      `M ${from.x} ${y0} ` +
+      `C ${from.x} ${y0 + drop * 0.55}, ${CX} ${JUNCTION_Y - drop * 0.5}, ${CX} ${JUNCTION_Y}`
+    );
+  };
+
+  const total = solarW + (mainsW ?? 0);
+  const stemColor = (mainsW ?? 0) > solarW ? NODES.acin.color : NODES.solar.color;
+
+  return (
+    <g>
+      <Wire d={branch(solarAt)} color={NODES.solar.color} watts={solarW} />
+      {paired && <Wire d={branch(mainsAt)} color={NODES.acin.color} watts={mainsW} />}
+      <Wire
+        d={`M ${CX} ${JUNCTION_Y} L ${CX} ${CY - HUB_R - 10}`}
+        color={stemColor}
+        watts={total}
+      />
+      <Node nodeKey="solar" watts={solarW} at={solarAt} />
+      {paired && <Node nodeKey="acin" watts={mainsW} at={mainsAt} />}
+    </g>
+  );
+}
+
 export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh: number }) {
   const { pvW, thirdPartyPvW, batteryW, gridW, soc, batteryStatus, homeW, homeSource, gridMeasured } =
     snapshot;
@@ -153,8 +237,10 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
   const homeKnown = homeSource !== "none";
   const storedKwh = (soc / 100) * ratedKwh;
 
+  const fromMains = mainsInputW(snapshot);
+
+  // Solar is not here: it lives in the supply row with its own branch.
   const links: Link[] = [
-    { node: "solar", watts: solarTotal, inbound: true },
     // batteryW > 0 is charging, i.e. hub -> battery.
     { node: "battery", watts: batteryW, inbound: batteryW < 0 },
     // gridW > 0 is importing, i.e. grid -> hub.
@@ -172,7 +258,8 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
         aria-label={
           `Battery ${soc} percent, ${batteryStatus} at ${formatW(Math.abs(batteryW))}. ` +
           `Solar ${formatW(solarTotal)}. Home ${homeKnown ? formatW(homeW) : "not measured"}. ` +
-          `Grid ${gridW >= 0 ? "importing" : "exporting"} ${formatW(Math.abs(gridW))}.`
+          `Grid ${gridW >= 0 ? "importing" : "exporting"} ${formatW(Math.abs(gridW))}.` +
+          (fromMains !== null ? ` AC input ${formatW(fromMains)}.` : "")
         }
       >
         <defs>
@@ -183,6 +270,8 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
           </radialGradient>
         </defs>
         <circle cx={CX} cy={CY} r={ORBIT} fill="url(#hub-glow)" />
+
+        <Supply solarW={solarTotal} mainsW={fromMains} />
 
         {links.map((l) => (
           <LinkPath key={l.node} link={l} />
@@ -209,7 +298,6 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
           </text>
         )}
 
-        <Node nodeKey="solar" watts={solarTotal} />
         <Node
           nodeKey="grid"
           watts={gridW}

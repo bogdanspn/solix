@@ -8,6 +8,7 @@ import {
   IconThermometer,
   IconWave,
 } from "./Icons.tsx";
+import { mainsInputW } from "./derive.ts";
 import { formatW } from "./format.ts";
 
 function split(w: number): [string, string] {
@@ -94,6 +95,8 @@ export function Readings({
   const [homeV, homeU] = split(snapshot.homeW);
   const [gridV, gridU] = split(snapshot.gridW);
   const homeKnown = snapshot.homeSource !== "none";
+  const mains = mainsInputW(snapshot);
+  const [mainsV, mainsU] = split(mains ?? 0);
 
   return (
     <>
@@ -133,6 +136,16 @@ export function Readings({
               : "Without a Smart Meter this is not a grid reading. It mirrors the AC output: what the Solarbank sends to the house, not what crosses the meter."
           }
         />
+        {mains !== null && (
+          <Row
+            icon={<IconGrid size={17} />}
+            color="var(--grid-series)"
+            label="AC input"
+            value={mainsV}
+            unit={mainsU}
+            title="House load the Solarbank is not covering, so it comes off the mains. At the discharge floor that is the whole of it."
+          />
+        )}
       </div>
 
       <h2 className="eyebrow">Today</h2>
