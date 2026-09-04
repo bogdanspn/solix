@@ -131,6 +131,7 @@ export function HistoryCharts() {
 
   const points = data?.points ?? [];
   const totals = data?.totals;
+  const today = data?.today;
 
   // Label the axis from the span the samples actually cover. A 30-day view
   // holding two hours of data was printing the same date on every tick.
@@ -140,6 +141,9 @@ export function HistoryCharts() {
 
   const RANGE_MS = { day: 24, week: 7 * 24, month: 30 * 24 } as const;
   const partial = spanMs > 0 && spanMs < RANGE_MS[range] * 3600_000 * 0.9;
+  const daysRecorded = Math.max(1, spanMs / 86_400_000);
+  const showDailyAverage = range !== "day" && totals;
+  const averageSolar = totals ? totals.pvKwh / daysRecorded : 0;
 
   return (
     <>
@@ -189,6 +193,21 @@ export function HistoryCharts() {
                 </div>
                 <div className="v">{formatKwh(totals.dischargeKwh)}</div>
               </div>
+              {showDailyAverage && (
+                <div className="energy-stat is-average">
+                  <div className="k">Solar / day</div>
+                  <div className="v">{formatKwh(averageSolar)}</div>
+                </div>
+              )}
+              {showDailyAverage && today && !partial && (
+                <div className="energy-stat is-comparison">
+                  <div className="k">Today / average</div>
+                  <div className="v">
+                    {formatKwh(today.pvKwh)}
+                    <small>{averageSolar > 0 ? `${((today.pvKwh / averageSolar) * 100).toFixed(0)}%` : "—"}</small>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

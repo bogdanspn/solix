@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import type { PvString } from "../../server/types.ts";
+import { formatW } from "./format.ts";
 
 /**
  * The page header: a low-poly house with its own weather.
@@ -12,9 +14,8 @@ import * as THREE from "three";
  *
  * Everything is lit rather than filled: a key light, a cool fill and a
  * hemisphere give every facet its own value, which is what separates a solid
- * object from a blueprint of one. Edges survive only on the architecture,
- * where they read as construction lines; on the planting they were noise, and
- * flat shading already gives each facet a hard boundary.
+ * object from a blueprint of one. Architecture is carried by light, shadow,
+ * and roof trim; only the solar panels retain their functional cell detail.
  *
  * Stops entirely for `prefers-reduced-motion` or a hidden tab.
  */
@@ -22,12 +23,17 @@ import * as THREE from "three";
 export interface HouseState {
   batteryW: number;
   gridW: number;
+  acOutW: number;
   solarW: number;
+  /** PV1..PV4, used to light their corresponding roof panel columns. */
+  strings: PvString[];
   peakSolarW: number;
   /** Household draw, for the run from the cabinet to the outlet. */
   homeW: number;
   /** Mains coming in, for the run from the grid panel. */
   mainsW: number;
+  /** True when gridW is a verified Smart Meter measurement. */
+  gridMeasured: boolean;
   /** Battery modules in the stack, which the cabinet is divided into. */
   packs: number;
 }
@@ -37,6 +43,8 @@ export interface HouseWeather {
   precipPct: number;
   isDay: boolean;
   radiation: number;
+  sunrise: string;
+  sunset: string;
 }
 
 interface Palette {
@@ -52,8 +60,6 @@ interface Palette {
   glass: number;
   /** The wall-mounted battery. */
   bank: number;
-  edge: number;
-  edgeOpacity: number;
   grid: number;
   /** Three tones, so the treeline is not one flat mass. */
   foliage: [number, number, number];
@@ -78,17 +84,15 @@ interface Palette {
 
 const DARK: Palette = {
   door: 0x27303d,
-  plinth: 0x1f242c,
-  wall: 0x3a424f,
+  plinth: 0x3d4856,
+  wall: 0x728298,
   roof: 0x415170,
   // Only a little under the roof: as a strong contrast the bands read as
   // gaps in the roof rather than as edges of it.
   trim: 0x3b4a66,
-  frame: 0x555f6d,
+  frame: 0x718093,
   glass: 0x5b7ea8,
   bank: 0x22272f,
-  edge: 0x9aa6ba,
-  edgeOpacity: 0.35,
   grid: 0x3c4450,
   foliage: [0x24503a, 0x1c4030, 0x2b5c42],
   trunk: 0x3a2f27,
@@ -108,14 +112,12 @@ const DARK: Palette = {
 const LIGHT: Palette = {
   door: 0x9aa5b4,
   plinth: 0xd0d6df,
-  wall: 0xf5f7fa,
+  wall: 0xffffff,
   roof: 0x6d84a8,
   trim: 0x647b9e,
   frame: 0xeef1f5,
   glass: 0xa9cbe8,
   bank: 0x8f97a3,
-  edge: 0x93a0b3,
-  edgeOpacity: 0.3,
   grid: 0xc2c9d4,
   foliage: [0x6e9c81, 0x5d8b70, 0x7fae8d],
   trunk: 0xb2a89b,
@@ -131,6 +133,28 @@ const LIGHT: Palette = {
   shadow: 0.22,
   contact: 0.3,
 };
+
+type Environment = Record<"sky" | "fog" | "ground" | "cloud", readonly [THREE.Color, THREE.Color, THREE.Color]>;
+
+const ENVIRONMENTS: Record<"dark" | "light", Environment> = {
+  dark: {
+    sky: [new THREE.Color(0x0c0d0f), new THREE.Color(0x241a20), new THREE.Color(0x040711)],
+    fog: [new THREE.Color(0x0c0d0f), new THREE.Color(0x181217), new THREE.Color(0x060914)],
+    ground: [new THREE.Color(0x3c4450), new THREE.Color(0x5b4a4b), new THREE.Color(0x293447)],
+    cloud: [new THREE.Color(0x526076), new THREE.Color(0x7a626b), new THREE.Color(0x7d90ac)],
+  },
+  light: {
+    sky: [new THREE.Color(0xeceef1), new THREE.Color(0xe5c9bd), new THREE.Color(0x9da0a5)],
+    fog: [new THREE.Color(0xeceef1), new THREE.Color(0xd8b8aa), new THREE.Color(0xaeb1b5)],
+    ground: [new THREE.Color(0xc2c9d4), new THREE.Color(0xd1aea1), new THREE.Color(0xb4b7bb)],
+    cloud: [new THREE.Color(0xaeb9c8), new THREE.Color(0xd9b6ad), new THREE.Color(0x66717d)],
+  },
+};
+
+const LIGHT_NIGHT_KEY = new THREE.Color(0xdce4ed);
+const LIGHT_NIGHT_HEMI_SKY = new THREE.Color(0xd7dfe9);
+const LIGHT_NIGHT_HEMI_GROUND = new THREE.Color(0x939aa3);
+const DARK_NIGHT_KEY = new THREE.Color(0x9cb2d0);
 
 const RAY_COUNT = 260;
 
@@ -536,34 +560,167 @@ function contactTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(canvas);
 }
 
+function cloudParticleTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const cloud = ctx.createRadialGradient(size / 2, size / 2, size * 0.04, size / 2, size / 2, size / 2);
+  cloud.addColorStop(0, "rgba(255,255,255,0.78)");
+  cloud.addColorStop(0.44, "rgba(255,255,255,0.54)");
+  cloud.addColorStop(0.75, "rgba(255,255,255,0.18)");
+  cloud.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = cloud;
+  ctx.fillRect(0, 0, size, size);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+const CLOUD_VERT = /* glsl */ `
+  varying vec3 vLocal;
+
+  void main() {
+    vLocal = position;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const CLOUD_FRAG = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uShade;
+  uniform float uOpacity;
+  uniform float uTime;
+  uniform float uSeed;
+  uniform vec3 uCamera;
+  uniform vec3 uBounds;
+  varying vec3 vLocal;
+
+  float hash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+
+  float noise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+      mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y),
+      f.z
+    );
+  }
+
+  float density(vec3 p) {
+    vec3 q = p / uBounds;
+    vec3 shapeP = vec3(q.x * 0.66, q.y * 1.28, q.z);
+    float shape = 1.0 - smoothstep(0.22, 0.58, length(shapeP));
+    vec3 wind = vec3(uTime * 0.012 + uSeed, 0.0, uTime * 0.006);
+    float detail = noise(q * 3.0 + wind) * 0.56 + noise(q * 6.5 - wind * 1.7) * 0.3 + noise(q * 12.0 + wind * 0.4) * 0.14;
+    return smoothstep(0.38, 0.7, detail + shape * 0.58) * shape;
+  }
+
+  vec2 hitBox(vec3 ro, vec3 rd) {
+    vec3 inv = 1.0 / rd;
+    vec3 t0 = (-uBounds - ro) * inv;
+    vec3 t1 = (uBounds - ro) * inv;
+    vec3 lo = min(t0, t1);
+    vec3 hi = max(t0, t1);
+    return vec2(max(max(lo.x, lo.y), lo.z), min(min(hi.x, hi.y), hi.z));
+  }
+
+  void main() {
+    vec3 ray = normalize(vLocal - uCamera);
+    vec2 hit = hitBox(uCamera, ray);
+    float near = max(hit.x, 0.0);
+    float far = hit.y;
+    if (far <= near) discard;
+
+    float stepSize = (far - near) / 28.0;
+    float transmittance = 1.0;
+    float alpha = 0.0;
+    float brightness = 0.0;
+    for (int i = 0; i < 28; i++) {
+      vec3 samplePoint = uCamera + ray * (near + (float(i) + 0.5) * stepSize);
+      float amount = density(samplePoint);
+      float vertical = samplePoint.y / uBounds.y;
+      float light = 0.42 + (vertical + 1.0) * 0.28;
+      float absorb = amount * stepSize * 2.0 * uOpacity;
+      float contribution = transmittance * absorb;
+      alpha += contribution;
+      brightness += contribution * light;
+      transmittance *= 1.0 - absorb;
+      if (transmittance < 0.025) break;
+    }
+    if (alpha < 0.012) discard;
+    gl_FragColor = vec4(uColor * uShade * (0.68 + (brightness / alpha) * 0.48), min(alpha, 0.82));
+  }
+`;
+
 export function HouseScene({ state, weather }: { state: HouseState; weather: HouseWeather | null }) {
   const hostRef = useRef<HTMLDivElement>(null);
+
+  const gridImporting = state.gridW >= 0;
+  const sourceLabel = state.gridMeasured
+    ? gridImporting
+      ? "Grid in"
+      : "Grid out"
+    : "AC input";
+  const sourceW = state.gridMeasured ? Math.abs(state.gridW) : state.mainsW;
+  const metrics = [
+    { label: "Solar", value: formatW(state.solarW), tone: "solar", spot: "roof" },
+    { label: "Home", value: formatW(state.homeW), tone: "home", spot: "home" },
+    { label: "Battery", value: formatW(Math.abs(state.batteryW)), tone: "battery", spot: "battery" },
+    { label: sourceLabel, value: formatW(sourceW), tone: "grid", spot: "service" },
+    { label: "AC output", value: formatW(Math.abs(state.acOutW)), tone: "output", spot: "output" },
+  ];
+  const metricsRef = useRef(metrics);
   const targetRef = useRef({
     color: new THREE.Color("#4ade80"),
     solar: 0,
+    strings: Array.from({ length: 4 }, () => 0),
     speed: 0.3,
     cloud: 0.3,
     rain: 0,
     day: 1,
+    dusk: 0,
     flow: { solar: 0, grid: 0, home: 0 } as Record<FlowKey, number>,
     packs: 1,
   });
 
   useEffect(() => {
-    const { batteryW, gridW, solarW, peakSolarW, homeW, mainsW, packs } = state;
+    const { batteryW, gridW, solarW, strings, peakSolarW, homeW, mainsW, packs } = state;
     let color = "#4ade80";
     if (gridW > 60) color = "#e66767";
     else if (solarW > 60) color = "#c98500";
 
     const magnitude = Math.max(Math.abs(batteryW), Math.abs(gridW), solarW);
+    const expectedStringW = Math.max(peakSolarW / Math.max(strings.length, 1), 300);
+    const totalSolarLevel = Math.min(solarW / Math.max(peakSolarW, 800), 1);
+    const sunriseMs = weather ? new Date(weather.sunrise).getTime() : NaN;
+    const sunsetMs = weather ? new Date(weather.sunset).getTime() : NaN;
+    const daylightProgress =
+      Number.isFinite(sunriseMs) && Number.isFinite(sunsetMs) && sunsetMs > sunriseMs
+        ? Math.min(1, Math.max(0, (Date.now() - sunriseMs) / (sunsetMs - sunriseMs)))
+        : 0;
     targetRef.current = {
       color: new THREE.Color(color),
-      solar: Math.min(solarW / Math.max(peakSolarW, 800), 1),
+      solar: totalSolarLevel,
+      strings: Array.from({ length: 4 }, (_, index) => {
+        const string = strings[index];
+        return string ? Math.min(Math.max(string.watts, 0) / expectedStringW, 1) : totalSolarLevel;
+      }),
       speed: 0.2 + Math.min(magnitude / 2500, 1) * 0.5,
       cloud: weather ? weather.cloudPct / 100 : 0.3,
       // Only actually raining above a meaningful probability.
       rain: weather && weather.precipPct >= 40 ? Math.min((weather.precipPct - 40) / 50, 1) : 0,
       day: weather ? (weather.isDay ? 1 : 0) : 1,
+      // A long ease into golden hour avoids a theatrical colour jump.
+      dusk: weather?.isDay ? Math.min(1, Math.max(0, (daylightProgress - 0.7) / 0.3)) : 0,
       // Below 5 W is noise, so the run stays dark rather than trickling. Above
       // it the band starts well up the range: against a white wall a faint
       // one is indistinguishable from the cable's own colour.
@@ -575,6 +732,10 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       packs,
     };
   }, [state, weather]);
+
+  useEffect(() => {
+    metricsRef.current = metrics;
+  }, [metrics]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -605,6 +766,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const scene = new THREE.Scene();
     const fog = new THREE.Fog(0x0c0d0f, 20, 44);
     scene.fog = fog;
+    const skyColor = new THREE.Color(0x0c0d0f);
+    scene.background = skyColor;
     const camera = new THREE.PerspectiveCamera(33, host.clientWidth / host.clientHeight, 0.1, 200);
     // Three-quarter from above: we see the panelled slope and one gable end,
     // meeting at the front corner. Held as an orbit about the subject so the
@@ -633,6 +796,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     };
 
     let pal = document.documentElement.dataset["theme"] === "light" ? LIGHT : DARK;
+    let environment = pal === LIGHT ? ENVIRONMENTS.light : ENVIRONMENTS.dark;
 
     // ---------------- light ----------------
     // The key sits on the camera's side of the house so the gable end and the
@@ -643,7 +807,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     scene.add(hemi);
 
     const key = new THREE.DirectionalLight(pal.keyColor, pal.keyIntensity);
-    key.position.set(16, 15, 11);
+    key.position.set(8, 15, 18);
     key.target.position.set(4, 1.6, -1);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
@@ -661,6 +825,9 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     key.shadow.bias = -0.0012;
     key.shadow.normalBias = 0.02;
     scene.add(key, key.target);
+    const dayKeyPosition = key.position.clone();
+    const duskKeyPosition = new THREE.Vector3(13, 5.5, 10);
+    const duskKeyColor = new THREE.Color(0xffb56b);
 
     // Cool counter-light on the shaded faces, so they read as turned away
     // from the sun rather than as holes.
@@ -671,15 +838,6 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // ---------------- materials ----------------
     const surface = (color: number, roughness = 0.92) =>
       track(new THREE.MeshStandardMaterial({ color, roughness, metalness: 0, fog: true }));
-
-    const wireMat = track(
-      new THREE.LineBasicMaterial({
-        color: pal.edge,
-        transparent: true,
-        opacity: pal.edgeOpacity,
-        fog: true,
-      }),
-    );
 
     const wallMat = surface(pal.wall, 0.95);
     const roofMat = surface(pal.roof, 0.8);
@@ -703,15 +861,12 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.98, metalness: 0, flatShading: true })),
     );
 
-    /** Architecture: filled, plus the construction lines along its arrises. */
+    /** Architecture: filled surfaces, shaped by the scene lighting. */
     const shell = (geo: THREE.BufferGeometry, mat: THREE.Material) => {
-      const g = new THREE.Group();
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      g.add(mesh);
-      g.add(new THREE.LineSegments(track(new THREE.EdgesGeometry(geo, 1)), wireMat));
-      return g;
+      return mesh;
     };
 
     /** Planting: no edges. Lighting and facets carry the form. */
@@ -959,11 +1114,11 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // The deck, and a coping band lipped over its edge.
     const garRoofGeo = track(new THREE.BoxGeometry(GAR_HALF * 2, 0.14, GAR_ROOF_D));
     garRoofGeo.translate(0, PLINTH + GAR_H + 0.07, GAR_ROOF_C);
-    house.add(shell(garRoofGeo, roofMat));
+    house.add(solidMesh(garRoofGeo, roofMat));
 
     const garCopeGeo = track(new THREE.BoxGeometry(GAR_HALF * 2 + 0.07, 0.05, GAR_ROOF_D + 0.07));
     garCopeGeo.translate(0, PLINTH + GAR_H + 0.15, GAR_ROOF_C + 0.035);
-    house.add(shell(garCopeGeo, roofMat));
+    house.add(solidMesh(garCopeGeo, roofMat));
 
     // The door: wide, low, and ribbed, so it is not mistaken for the one on
     // the house.
@@ -1096,6 +1251,18 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         );
     };
 
+    // Each roof column is one physical PV string. The shader's reflection
+    // uniform stays shared, while output intensity is independent per bank.
+    const panelBanks = Array.from({ length: 4 }, () => {
+      const face = track(panelMat.clone());
+      face.onBeforeCompile = panelMat.onBeforeCompile;
+      return {
+        face,
+        cells: track(cellMat.clone()),
+        edges: track(panelEdgeMat.clone()),
+      };
+    });
+
     const panelGeo = track(new THREE.BoxGeometry(PANEL_W, PANEL_T, PANEL_H));
     panelGeo.rotateZ(tilt);
     const panelEdges = track(new THREE.EdgesGeometry(panelGeo));
@@ -1115,7 +1282,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     for (let col = 0; col < 4; col++) {
       for (let row = 0; row < 2; row++) {
         const p = new THREE.Group();
-        const face = new THREE.Mesh(panelGeo, panelMat);
+        const bank = panelBanks[col]!;
+        const face = new THREE.Mesh(panelGeo, bank.face);
         face.castShadow = true;
         face.receiveShadow = true;
         for (const side of [-1, 1]) {
@@ -1128,8 +1296,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         }
         p.add(
           face,
-          new THREE.LineSegments(cellGeo, cellMat),
-          new THREE.LineSegments(panelEdges, panelEdgeMat),
+          new THREE.LineSegments(cellGeo, bank.cells),
+          new THREE.LineSegments(panelEdges, bank.edges),
         );
         // One gap figure for both axes. The panel is PANEL_W across the
         // slope and PANEL_H along the ridge, so the two pitches have to
@@ -1160,6 +1328,12 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const bankGeo = track(new THREE.BoxGeometry(BANK_D, BANK_H, BANK_W));
     bankGeo.translate(BANK_X, PLINTH + BANK_H / 2, BANK_Z);
     house.add(shell(bankGeo, bankMat));
+    const bankLedMat = track(
+      new THREE.MeshBasicMaterial({ color: 0x55e89a, transparent: true, opacity: 0 }),
+    );
+    const bankLed = new THREE.Mesh(track(new THREE.SphereGeometry(0.035, 10, 8)), bankLedMat);
+    bankLed.position.set(BANK_X + BANK_D / 2 + 0.025, PLINTH + BANK_H * 0.72, BANK_Z);
+    house.add(bankLed);
 
     // The stack is modular, so the cabinet carries a seam between each pair
     // of modules. Built to the maximum and shown to the count: the pack
@@ -1288,6 +1462,73 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const socketGeo = track(new THREE.BoxGeometry(0.05, 0.16, 0.13));
     socketGeo.translate(WALL_FACE + 0.025, SOCKET_Y, SOCKET_Z);
     house.add(shell(socketGeo, frameMat));
+
+    // Sprites belong to the house, so their anchors follow the architecture
+    // through camera movement instead of being pinned to flat CSS percentages.
+    const pinStyle = {
+      roof: 0xc98500,
+      home: 0x478abf,
+      battery: 0x399c6a,
+      service: 0xd56565,
+      output: 0xd56565,
+    } as const;
+    const pinAnchors: ReadonlyArray<{ spot: keyof typeof pinStyle; position: THREE.Vector3 }> = [
+      { spot: "roof", position: new THREE.Vector3(1.15, 3.58, -0.28) },
+      { spot: "home", position: new THREE.Vector3(WALL_FACE + 0.15, SOCKET_Y + 0.3, SOCKET_Z) },
+      { spot: "battery", position: new THREE.Vector3(BANK_X + BANK_D / 2 + 0.14, PLINTH + BANK_H + 0.28, BANK_Z) },
+      { spot: "service", position: new THREE.Vector3(METER_X, METER_Y + 0.48, GABLE_Z - 0.16) },
+      { spot: "output", position: new THREE.Vector3(METER_X, METER_Y - 0.25, GABLE_Z - 0.16) },
+    ];
+    const scenePins: Array<{
+      spot: keyof typeof pinStyle;
+      sprite: THREE.Sprite;
+      texture: THREE.CanvasTexture;
+      canvas: HTMLCanvasElement;
+    }> = [];
+    const paintPin = (pin: (typeof scenePins)[number], value: string, light: boolean) => {
+      const scale = 2;
+      const font = "600 18px sans-serif";
+      const measure = pin.canvas.getContext("2d")!;
+      measure.font = font;
+      const width = Math.ceil(Math.max(42, measure.measureText(value).width + 24));
+      const height = 30;
+      pin.canvas.width = width * scale;
+      pin.canvas.height = height * scale;
+      const context = pin.canvas.getContext("2d")!;
+      context.scale(scale, scale);
+      context.beginPath();
+      context.roundRect(1, 1, width - 2, height - 2, height / 2);
+      context.fillStyle = light ? "rgba(250, 251, 253, 0.92)" : "rgba(25, 30, 37, 0.9)";
+      context.fill();
+      context.lineWidth = 1;
+      context.strokeStyle = `#${pinStyle[pin.spot].toString(16).padStart(6, "0")}`;
+      context.stroke();
+      context.font = font;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillStyle = light ? "#20242a" : "#f4f7fb";
+      context.fillText(value, width / 2, height / 2);
+      pin.texture.needsUpdate = true;
+      pin.sprite.scale.set(width * 0.0105, height * 0.0105, 1);
+    };
+    for (const anchor of pinAnchors) {
+      const canvas = document.createElement("canvas");
+      const texture = track(new THREE.CanvasTexture(canvas));
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      const material = track(
+        new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false, fog: false }),
+      );
+      const sprite = new THREE.Sprite(material);
+      sprite.position.copy(anchor.position);
+      sprite.renderOrder = 6;
+      house.add(sprite);
+      const pin = { spot: anchor.spot, sprite, texture, canvas };
+      scenePins.push(pin);
+      paintPin(pin, metricsRef.current.find((metric) => metric.spot === anchor.spot)?.value ?? "--", pal === LIGHT);
+    }
+    let pinSignature = "";
 
     // ---------------- ground ----------------
     // One world unit per cell, so the plinth lands exactly on cell
@@ -1418,26 +1659,23 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     /** Rounder broadleaf, so the treeline is not all conifers. */
     const addBroadleaf = (x: number, z: number, scale: number) => {
       const t = new THREE.Group();
-      const mat = leafMat();
       const trunk = solidMesh(trunkGeo, trunkMat);
       trunk.scale.set(1.1, 1.35, 1.1);
       trunk.position.y = 0.68;
       t.add(trunk);
-      const crown = solidMesh(bushGeo, mat);
-      crown.scale.set(0.86, 0.94, 0.86);
-      crown.position.y = 1.86;
-      crown.rotation.set(Math.random(), Math.random() * Math.PI, 0);
-      t.add(crown);
-      const crown2 = solidMesh(bushGeo, mat);
-      crown2.scale.set(0.5, 0.48, 0.5);
-      crown2.position.set(0.26, 1.6, 0.16);
-      crown2.rotation.y = Math.random() * Math.PI;
-      t.add(crown2);
-      const crown3 = solidMesh(bushGeo, mat);
-      crown3.scale.set(0.42, 0.4, 0.42);
-      crown3.position.set(-0.22, 1.66, -0.2);
-      crown3.rotation.y = Math.random() * Math.PI;
-      t.add(crown3);
+      const crownLobes = [
+        [0, 1.82, 0, 0.76, 0.82],
+        [0.3, 1.62, 0.16, 0.47, 0.46],
+        [-0.27, 1.67, -0.18, 0.43, 0.43],
+        [-0.04, 2.12, 0.04, 0.42, 0.52],
+      ];
+      for (const [lobeX, lobeY, lobeZ, width, height] of crownLobes) {
+        const crown = solidMesh(bushGeo, leafMat());
+        crown.scale.set(width, height, width * 0.92);
+        crown.position.set(lobeX, lobeY, lobeZ);
+        crown.rotation.set(Math.random() * 0.5, Math.random() * Math.PI, 0);
+        t.add(crown);
+      }
       t.position.set(x, 0, z);
       t.scale.setScalar(scale);
       t.rotation.y = Math.random() * Math.PI;
@@ -1479,11 +1717,11 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
       const potGeo = track(new THREE.CylinderGeometry(0.22, 0.16, 0.34, 12));
       potGeo.translate(potX, PLINTH + 0.17, potZ);
-      house.add(shell(potGeo, plinthMat));
+      house.add(solidMesh(potGeo, plinthMat));
 
       const rimGeo = track(new THREE.CylinderGeometry(0.245, 0.245, 0.06, 12));
       rimGeo.translate(potX, PLINTH + 0.32, potZ);
-      house.add(shell(rimGeo, plinthMat));
+      house.add(solidMesh(rimGeo, plinthMat));
 
       // Three lobes, the same way the ground bushes are built.
       for (let i = 0; i < 3; i++) {
@@ -1592,57 +1830,79 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // ---------------- clouds ----------------
     const clouds = new THREE.Group();
     scene.add(clouds);
-    // Deliberately unlit: a cloud shaded by the key reads as a rock. Flat
-    // fill with a soft opacity is what reads as vapour.
-    const cloudMat = track(
-      new THREE.MeshBasicMaterial({
-        color: pal.cloud,
-        transparent: true,
-        opacity: 0.5,
-        depthWrite: false,
-        fog: true,
-      }),
-    );
-    // A six-sided prism with its hex faces toward the viewer: the silhouette
-    // is a hexagon, and stretching it along x makes the elongated plate the
-    // mockup calls for. Strings of spheres read as bubbles, not cloud.
-    const puffGeo = track(new THREE.CylinderGeometry(1, 1, 0.45, 6));
-    puffGeo.rotateX(Math.PI / 2);
-    puffGeo.rotateZ(Math.PI / 6);
+    // Bounded density fields preserve the depth and self-occlusion cues of
+    // volumetric clouds without turning the entire header into a raymarch.
+    const cloudVolumes: Array<{ mesh: THREE.Mesh; uniforms: Record<string, THREE.IUniform> }> = [];
+    const viewForward = LOOK.clone().sub(camera.position).normalize();
+    const viewRight = new THREE.Vector3().crossVectors(viewForward, new THREE.Vector3(0, 1, 0)).normalize();
+    const cloudLayouts: ReadonlyArray<{
+      offset: number;
+      height: number;
+      scale: number;
+      shade: number;
+      lobes: ReadonlyArray<readonly [number, number, number, number, number]>;
+    }> = [
+      {
+        offset: -12.5,
+        height: 3.55,
+        scale: 1.2,
+        shade: 0.84,
+        lobes: [[-1.65, -0.1, 0.18, 0.5, 0.52], [-0.85, 0.1, -0.12, 0.74, 0.8], [0, 0.38, -0.2, 1, 1], [0.9, 0.12, 0.14, 0.76, 0.76], [1.7, -0.08, 0.06, 0.48, 0.5]],
+      },
+      {
+        offset: -3.2,
+        height: 5.05,
+        scale: 0.45,
+        shade: 1.08,
+        lobes: [[-0.9, 0.05, 0.08, 0.7, 0.54], [0, 0.2, -0.12, 0.92, 0.76], [0.82, 0.02, 0.1, 0.64, 0.5]],
+      },
+      {
+        offset: 5.4,
+        height: 3.25,
+        scale: 0.98,
+        shade: 0.94,
+        lobes: [[-1.22, -0.15, 0.2, 0.66, 0.58], [-0.42, 0.3, -0.1, 0.88, 1.12], [0.5, 0.12, 0.12, 0.82, 0.84], [1.2, -0.08, -0.04, 0.58, 0.52]],
+      },
+      {
+        offset: 14.6,
+        height: 4.5,
+        scale: 0.52,
+        shade: 0.76,
+        lobes: [[-0.72, -0.1, 0.12, 0.66, 0.64], [0.05, 0.38, -0.15, 0.96, 1.2], [0.82, 0.03, 0.08, 0.62, 0.56]],
+      },
+    ];
 
-    // The camera sits 39 degrees off axis, so a cloud built along world X
-    // recedes diagonally. Turning each one to face the camera makes its long
-    // axis run horizontally on screen, which is what actually reads as flat.
-    const cloudFacing = Math.atan2(camera.position.x - 1.6, camera.position.z - 0.6);
-
-    const CLOUDS = 10;
-    for (let i = 0; i < CLOUDS; i++) {
-      const c = new THREE.Group();
-      // One to three plates per cloud, offset and overlapping only slightly,
-      // so each hexagon stays legible instead of merging into a lumpy mass.
-      const puffs = 1 + Math.floor(Math.random() * 3);
-      for (let k = 0; k < puffs; k++) {
-        const m = new THREE.Mesh(puffGeo, cloudMat);
-        const w = 0.55 + Math.random() * 0.7;
-        m.position.set(
-          (k - (puffs - 1) / 2) * (w * 1.55),
-          (Math.random() - 0.5) * 0.3,
-          (Math.random() - 0.5) * 0.5,
+    for (const { offset, height, scale, shade, lobes } of cloudLayouts) {
+      const centre = LOOK.clone().addScaledVector(viewForward, 18).addScaledVector(viewRight, offset);
+      const drift = 0.05 + Math.random() * 0.13;
+      for (const [lobeX, lobeY, lobeZ, lobeWidth, lobeHeight] of lobes) {
+        const bounds = new THREE.Vector3(2.45 * scale * lobeWidth, 1.4 * scale * lobeHeight, 1.3 * scale * lobeWidth);
+        const uniforms: Record<string, THREE.IUniform> = {
+          uColor: { value: new THREE.Color(pal.cloud) },
+          uShade: { value: shade },
+          uOpacity: { value: 0.5 },
+          uTime: { value: 0 },
+          uSeed: { value: Math.random() * 20 },
+          uCamera: { value: new THREE.Vector3() },
+          uBounds: { value: bounds },
+        };
+        const material = track(
+          new THREE.ShaderMaterial({
+            uniforms,
+            vertexShader: CLOUD_VERT,
+            fragmentShader: CLOUD_FRAG,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.BackSide,
+          }),
         );
-        // Long and low: an elongated hexagon rather than a ball.
-        m.scale.set(w * 1.45, w * 0.62, 1);
-        c.add(m);
+        const mesh = new THREE.Mesh(track(new THREE.BoxGeometry(bounds.x * 2, bounds.y * 2, bounds.z * 2)), material);
+        mesh.position.copy(centre).addScaledVector(viewRight, lobeX * scale).addScaledVector(viewForward, lobeZ * scale);
+        mesh.position.y = height + lobeY * scale;
+        mesh.userData["drift"] = drift;
+        clouds.add(mesh);
+        cloudVolumes.push({ mesh, uniforms });
       }
-      c.position.set(
-        -28 + Math.random() * 58,
-        // Kept low enough to stay inside the band at this focal length.
-        5.0 + Math.random() * 2.0,
-        -5 - Math.random() * 12,
-      );
-      c.rotation.set(0, cloudFacing, 0);
-      c.scale.setScalar(0.5 + Math.random() * 0.55);
-      c.userData["drift"] = 0.05 + Math.random() * 0.13;
-      clouds.add(c);
     }
 
     // ---------------- sky: rays and rain ----------------
@@ -1762,6 +2022,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
     // ---------------- theme ----------------
     const applyPalette = (p: Palette) => {
+      environment = p === LIGHT ? ENVIRONMENTS.light : ENVIRONMENTS.dark;
       plinthMat.color.setHex(p.plinth);
       doorMat.color.setHex(p.door);
       trimMat.color.setHex(p.trim);
@@ -1772,10 +2033,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       roofMat.color.setHex(p.roof);
       trunkMat.color.setHex(p.trunk);
       foliageMats.forEach((m, i) => m.color.setHex(p.foliage[i % p.foliage.length]!));
-      wireMat.color.setHex(p.edge);
-      wireMat.opacity = p.edgeOpacity;
       gridMat.color.setHex(p.grid);
-      cloudMat.color.setHex(p.cloud);
+      for (const cloud of cloudVolumes) (cloud.uniforms.uColor!.value as THREE.Color).setHex(p.cloud);
       fog.color.setHex(p.fog);
       hemi.color.setHex(p.hemiSky);
       hemi.groundColor.setHex(p.hemiGround);
@@ -1839,6 +2098,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     let rayPhase = 0;
     let lastPacks = 1;
     let rainPhase = 0;
+    let shadowDusk = -1;
 
     const render = (dt: number) => {
       const target = targetRef.current;
@@ -1849,29 +2109,85 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         applyPalette(pal);
       }
 
+      const nextPinSignature = `${pal === LIGHT}|${metricsRef.current.map((metric) => metric.value).join("|")}`;
+      if (nextPinSignature !== pinSignature) {
+        pinSignature = nextPinSignature;
+        for (const pin of scenePins) {
+          const metric = metricsRef.current.find((item) => item.spot === pin.spot);
+          paintPin(pin, metric?.value ?? "--", pal === LIGHT);
+        }
+      }
+
+      const duskAmount = target.day * target.dusk;
+      const nightAmount = 1 - target.day;
+      const blendEnvironment = (out: THREE.Color, colors: readonly [THREE.Color, THREE.Color, THREE.Color]) => {
+        out.copy(colors[0]).lerp(colors[1], duskAmount).lerp(colors[2], nightAmount);
+      };
+      blendEnvironment(skyColor, environment.sky);
+      blendEnvironment(fog.color, environment.fog);
+      blendEnvironment(gridMat.color, environment.ground);
+      for (const cloud of cloudVolumes) blendEnvironment(cloud.uniforms.uColor!.value as THREE.Color, environment.cloud);
+
+      const keyPosition = dayKeyPosition.clone().lerp(duskKeyPosition, target.dusk);
+      key.position.lerp(keyPosition, 0.025);
+      key.color.copy(new THREE.Color(pal.keyColor)).lerp(duskKeyColor, duskAmount);
+      if (pal === LIGHT) key.color.lerp(LIGHT_NIGHT_KEY, nightAmount);
+      else key.color.lerp(DARK_NIGHT_KEY, nightAmount);
+      if (pal === LIGHT) {
+        hemi.color.copy(new THREE.Color(pal.hemiSky)).lerp(LIGHT_NIGHT_HEMI_SKY, nightAmount);
+        hemi.groundColor.copy(new THREE.Color(pal.hemiGround)).lerp(LIGHT_NIGHT_HEMI_GROUND, nightAmount);
+      }
+      const nightLightLevel = pal === LIGHT ? 0.32 : 0.48;
+      const nightHemiLevel = pal === LIGHT ? 0.42 : 0.68;
+      key.intensity += (pal.keyIntensity * (target.day ? 1 - target.dusk * 0.35 : nightLightLevel) - key.intensity) * 0.025;
+      const dayHemiLevel = pal === LIGHT ? 0.82 : pal.hemiIntensity;
+      const dayFillLevel = pal === LIGHT ? 0.56 : pal.fillIntensity;
+      hemi.intensity += ((target.day ? dayHemiLevel * (1 - target.dusk * 0.16) : pal.hemiIntensity * nightHemiLevel) - hemi.intensity) * 0.025;
+      fill.intensity += ((target.day ? dayFillLevel : pal.fillIntensity * 0.45) - fill.intensity) * 0.025;
+      wallMat.emissive.setHex(pal === LIGHT ? 0xffffff : 0x000000);
+      const wallLift = pal === LIGHT && target.day ? 0.055 * (1 - target.dusk * 0.3) : 0;
+      wallMat.emissiveIntensity += (wallLift - wallMat.emissiveIntensity) * 0.035;
+      glassMat.emissive.setHex(pal === LIGHT ? 0xffe2b8 : 0xffc47a);
+      const windowGlow = pal === LIGHT ? 0.38 : 0.5;
+      glassMat.emissiveIntensity += ((1 - target.day) * windowGlow - glassMat.emissiveIntensity) * 0.035;
+      bankLedMat.opacity += ((1 - target.day) * 0.72 - bankLedMat.opacity) * 0.05;
+      if (Math.abs(target.dusk - shadowDusk) > 0.05) {
+        shadowDusk = target.dusk;
+        renderer.shadowMap.needsUpdate = true;
+      }
+
       glowMat.color.lerp(target.color, 0.03);
       rays.uniforms.uColor.value.lerp(new THREE.Color("#e8b355"), 0.03);
 
       const solar = target.solar;
       // The array brightens with what it is making. Cool, and gently: the
       // cell lines do most of the work, so the glass never leaves its hue.
-      panelMat.emissiveIntensity += (solar * 0.3 - panelMat.emissiveIntensity) * 0.04;
-      cellMat.opacity += (0.18 + solar * 0.55 - cellMat.opacity) * 0.04;
-      panelEdgeMat.opacity += (0.35 + solar * 0.45 - panelEdgeMat.opacity) * 0.04;
+      panelBanks.forEach((bank, index) => {
+        const stringPower = target.strings[index] ?? solar;
+        bank.face.emissiveIntensity += (stringPower * 0.3 - bank.face.emissiveIntensity) * 0.04;
+        bank.cells.opacity += (0.18 + stringPower * 0.55 - bank.cells.opacity) * 0.04;
+        bank.edges.opacity += (0.35 + stringPower * 0.45 - bank.edges.opacity) * 0.04;
+      });
       glowMat.opacity = 0.015 + solar * 0.025;
 
-      // Rays are gated by daylight AND thinned by real cloud cover, so a
-      // 100%-overcast noon looks overcast rather than blazing.
-      const rayTarget = target.day * (0.62 + (1 - target.cloud) * 0.38) * (0.5 + solar * 0.5);
+      // A light suggestion of direct sun, not a weather effect. The warmer
+      // key light owns golden hour; these thin out before it takes over.
+      const rayTarget =
+        target.day * (0.45 + (1 - target.cloud) * 0.55) * (0.06 + solar * 0.16) * (1 - target.dusk * 0.8);
       rays.uniforms.uOpacity.value += (rayTarget - rays.uniforms.uOpacity.value) * 0.03;
       // Fraction of shafts drawn, straight from PV output.
-      rays.uniforms.uAmount.value += (Math.min(0.28 + solar * 0.85, 1) - rays.uniforms.uAmount.value) * 0.03;
+      rays.uniforms.uAmount.value += (Math.min(0.08 + solar * 0.3, 0.38) - rays.uniforms.uAmount.value) * 0.03;
       // Sunnier means the shafts sweep through faster.
       raySpeed += (0.3 + solar * 1.35 - raySpeed) * 0.04;
 
       rain.uniforms.uOpacity.value += (target.rain * 0.55 - rain.uniforms.uOpacity.value) * 0.03;
 
-      cloudMat.opacity += (0.06 + target.cloud * 0.34 - cloudMat.opacity) * 0.03;
+      for (const cloud of cloudVolumes) {
+        const nightContrast = pal === LIGHT && !target.day ? 1.35 : 1;
+        cloud.uniforms.uOpacity!.value += ((0.42 + target.cloud * 0.58) * nightContrast - cloud.uniforms.uOpacity!.value) * 0.03;
+        cloud.uniforms.uTime!.value += dt;
+        (cloud.uniforms.uCamera!.value as THREE.Vector3).copy(camera.position).sub(cloud.mesh.position);
+      }
       for (const c of clouds.children) {
         c.position.x += (c.userData["drift"] as number) * dt;
         if (c.position.x > 24) c.position.x = -24;
@@ -1932,5 +2248,11 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     };
   }, []);
 
-  return <div className="house" ref={hostRef} aria-hidden />;
+  return (
+    <section
+      className="house"
+      ref={hostRef}
+      aria-label={`Live power: ${metrics.map((metric) => `${metric.label} ${metric.value}`).join(", ")}`}
+    />
+  );
 }

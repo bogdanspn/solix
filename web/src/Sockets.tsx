@@ -38,8 +38,6 @@ export function Sockets({ plugs, onRenamed }: { plugs: PlugReading[]; onRenamed:
     }
   };
 
-  if (plugs.length === 0) return null;
-
   const sorted = [...plugs].sort((a, b) => b.watts - a.watts);
   const total = plugs.reduce((s, p) => s + (p.online ? p.watts : 0), 0);
   const peak = Math.max(...sorted.map((p) => p.watts), 1);
@@ -101,8 +99,17 @@ export function Sockets({ plugs, onRenamed }: { plugs: PlugReading[]; onRenamed:
         </div>
       </div>
 
-      <div className="socket-grid">
-        {sorted.map((p) => {
+      {plugs.length === 0 ? (
+        <div className="socket-empty">
+          <IconPlug size={22} />
+          <div>
+            <strong>No sockets connected yet</strong>
+            <p>Enable Modbus TCP for each Smart Plug in the Anker app, then scan your network.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="socket-grid">
+          {sorted.map((p) => {
           const share = total > 0 ? (p.watts / total) * 100 : 0;
           return (
             <div className={`plug ${p.online ? "" : "is-offline"}`} key={p.serial || p.host}>
@@ -169,8 +176,9 @@ export function Sockets({ plugs, onRenamed }: { plugs: PlugReading[]; onRenamed:
               {p.serial && <div className="plug-serial">{p.serial}</div>}
             </div>
           );
-        })}
-      </div>
+          })}
+        </div>
+      )}
 
       <Confirm
         open={pending !== null}

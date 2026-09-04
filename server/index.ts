@@ -7,7 +7,7 @@ import { history, peakPvW, sampleCount, todayTotals, type Range } from "./histor
 import { isWritableKey, writeSetting } from "./control.ts";
 import { OPERATING_MODE, OPERATING_MODE_LABELS } from "./registers.ts";
 import { plugHosts, setPlugHosts, setPlugName, setPlugSwitch } from "./plugs.ts";
-import { discoverPlugs, identifyMeter, identifyPlug, persistMeterHost, persistPlugHosts } from "./discovery.ts";
+import { identifyMeter, identifyPlug, persistMeterHost, persistPlugHosts, scanSubnet } from "./discovery.ts";
 import { setMeterHost } from "./config.ts";
 import { geocode, getWeather, loadPlace, savePlace } from "./weather.ts";
 import type { Snapshot } from "./types.ts";
@@ -72,7 +72,7 @@ app.get("/api/history", (req, res) => {
     res.status(400).json({ error: "range must be day, week or month" });
     return;
   }
-  res.json(history(range as Range));
+  res.json({ ...history(range as Range), today: todayTotals() });
 });
 
 app.get("/api/settings", (_req, res) => {
@@ -121,7 +121,22 @@ app.post("/api/plugs/rescan", async (_req, res) => {
   }
   rescanning = true;
   try {
-    const found = await discoverPlugs(config.port, config.unitId, [config.host]);
+    const responders = await scanSubnet(config.port);
+    const found = [];
+    let meter: string | null = null;
+
+    // A meter is a distinct Modbus device, not a kind of socket. Classifying
+    // every responder here keeps the scan single-pass while allowing a newly
+    // installed meter to be found even when there are no smart plugs yet.
+    for (const host of responders) {
+      if (host === config.host) continue;
+      const plug = await identifyPlug(host, config.port, config.unitId);
+      if (plug) {
+        found.push(plug);
+        continue;
+      }
+      if (!meter && await identifyMeter(host, config.port, config.unitId)) meter = host;
+    }
 
     /*
      * A sweep that misses a socket must not delete it.
@@ -142,15 +157,7 @@ app.post("/api/plugs/rescan", async (_req, res) => {
     const { added, removed } = setPlugHosts(hosts);
     persistPlugHosts(hosts);
 
-    // A Smart Meter would also be a separate device on the LAN; if one shows
-    // up, the grid and load registers become real house measurements.
-    let meter: string | null = null;
-    for (const h of hosts) {
-      if (await identifyMeter(h, config.port, config.unitId)) {
-        meter = h;
-        break;
-      }
-    }
+    // A Smart Meter makes the grid and load registers real house measurements.
     if (meter) {
       setMeterHost(meter);
       persistMeterHost(meter);

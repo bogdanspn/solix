@@ -163,4 +163,5 @@ export interface HistoryResponse {
   range: "day" | "week" | "month";
   points: HistoryPoint[];
   totals: EnergyTotals;
+  today: EnergyTotals;
 }

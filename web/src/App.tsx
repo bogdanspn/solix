@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { DeviceInfo, EnergyTotals, Snapshot } from "../../server/types.ts";
-import { HouseScene } from "./HouseScene.tsx";
 import { PowerFlow } from "./PowerFlow.tsx";
 import { Readings } from "./Readings.tsx";
 import { HistoryCharts } from "./HistoryCharts.tsx";
@@ -13,6 +12,10 @@ import { formatClock, formatDuration, formatW } from "./format.ts";
 import { IconBolt, IconMoon, IconSettings, IconSun } from "./Icons.tsx";
 import { weatherLook } from "./WeatherIcon.tsx";
 
+const HouseScene = lazy(() =>
+  import("./HouseScene.tsx").then((module) => ({ default: module.HouseScene })),
+);
+
 type LiveSnapshot = Snapshot & { today: EnergyTotals };
 
 interface DeviceResponse {
@@ -20,6 +23,50 @@ interface DeviceResponse {
   modes: Array<{ value: string; label: string }>;
   /** Highest PV ever recorded, used to scale the scene against a real peak. */
   peakPvW: number;
+}
+
+function ConfidenceBand({ snapshot }: { snapshot: Snapshot }) {
+  const home =
+    snapshot.homeSource === "meter"
+      ? { label: "Household demand", value: "Smart Meter", detail: "Direct measurement", tone: "good" }
+      : snapshot.homeSource === "sockets"
+        ? {
+            label: "Household demand",
+            value: "Socket estimate",
+            detail: snapshot.unmeteredW > 0 ? `${formatW(snapshot.unmeteredW)} not covered` : "Covered by sockets",
+            tone: "warn",
+          }
+        : { label: "Household demand", value: "Not measured", detail: "Add a meter or sockets", tone: "critical" };
+  const grid = snapshot.gridMeasured
+    ? { value: "Grid measured", detail: "Import and export are live", tone: "good" }
+    : { value: "AC output only", detail: "Grid flow needs a Smart Meter", tone: "warn" };
+  const freshness = snapshot.online && snapshot.staleSeconds <= 20
+    ? { value: "Live", detail: "Reading every 5 seconds", tone: "good" }
+    : { value: "Last known reading", detail: `${snapshot.staleSeconds}s old`, tone: "critical" };
+
+  return (
+    <section className="confidence-band" aria-label="Measurement confidence">
+      <div className="confidence-intro">
+        <span className="eyebrow">System confidence</span>
+        <p>Know what each number represents.</p>
+      </div>
+      <div className={`confidence-item is-${home.tone}`}>
+        <span className="confidence-label">{home.label}</span>
+        <strong>{home.value}</strong>
+        <small>{home.detail}</small>
+      </div>
+      <div className={`confidence-item is-${grid.tone}`}>
+        <span className="confidence-label">Grid flow</span>
+        <strong>{grid.value}</strong>
+        <small>{grid.detail}</small>
+      </div>
+      <div className={`confidence-item is-${freshness.tone}`}>
+        <span className="confidence-label">Data freshness</span>
+        <strong>{freshness.value}</strong>
+        <small>{freshness.detail}</small>
+      </div>
+    </section>
+  );
 }
 
 function useTheme() {
@@ -120,7 +167,7 @@ export function App() {
     snapshot.operatingMode.replace(/_/g, " ");
 
   return (
-    <div className="app">
+    <div className={`app${theme === "light" && weather.report && !weather.report.now.isDay ? " is-light-night" : ""}`}>
       <header className="header">
         <div className="brand">
           <span className="mark">
@@ -185,29 +232,38 @@ export function App() {
         </div>
       )}
 
-      <HouseScene
-        state={{
-          batteryW: snapshot.batteryW,
-          gridW: snapshot.gridW,
-          solarW: snapshot.pvW + snapshot.thirdPartyPvW,
-          // The largest PV actually recorded, so the panel glow is scaled
-          // against this array rather than an unrelated register.
-          peakSolarW: info?.peakPvW || 2500,
-          homeW: snapshot.homeSource === "none" ? 0 : snapshot.homeW,
-          mainsW: mainsInputW(snapshot) ?? 0,
-          packs: info?.device.packs ?? 1,
-        }}
-        weather={
-          weather.report
-            ? {
-                cloudPct: weather.report.now.cloudPct,
-                precipPct: weather.report.days[0]?.precipPct ?? 0,
-                isDay: weather.report.now.isDay,
-                radiation: weather.report.now.radiation,
-              }
-            : null
-        }
-      />
+      <Suspense fallback={<div className="house house-loading" aria-hidden />}>
+        <HouseScene
+          state={{
+            batteryW: snapshot.batteryW,
+            gridW: snapshot.gridW,
+            acOutW: snapshot.acOutW,
+            solarW: snapshot.pvW + snapshot.thirdPartyPvW,
+            strings: snapshot.strings,
+            // The largest PV actually recorded, so the panel glow is scaled
+            // against this array rather than an unrelated register.
+            peakSolarW: info?.peakPvW || 2500,
+            homeW: snapshot.homeSource === "none" ? 0 : snapshot.homeW,
+            mainsW: snapshot.gridMeasured ? Math.max(snapshot.gridW, 0) : (mainsInputW(snapshot) ?? 0),
+            gridMeasured: snapshot.gridMeasured,
+            packs: info?.device.packs ?? 1,
+          }}
+          weather={
+            weather.report
+              ? {
+                  cloudPct: weather.report.now.cloudPct,
+                  precipPct: weather.report.days[0]?.precipPct ?? 0,
+                  isDay: weather.report.now.isDay,
+                  radiation: weather.report.now.radiation,
+                  sunrise: weather.report.days[0]?.sunrise ?? "",
+                  sunset: weather.report.days[0]?.sunset ?? "",
+                }
+              : null
+          }
+        />
+      </Suspense>
+
+      <ConfidenceBand snapshot={snapshot} />
 
       <div className="layout">
         <section className="card flow-card">
@@ -221,7 +277,7 @@ export function App() {
             <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} />
           </section>
           <section className="card">
-            <Weather {...weather} />
+            <Weather {...weather} onReviewSettings={() => setSettingsOpen(true)} />
           </section>
         </div>
 
@@ -265,11 +321,15 @@ function footnote(s: Snapshot): string {
   if (s.eta.direction === "discharge" && s.eta.minutes !== null) {
     return `At the current draw the battery reaches its ${s.eta.targetSoc}% floor in ${formatDuration(s.eta.minutes)}.`;
   }
+  const mainsEstimate = mainsInputW(s);
+  if (mainsEstimate !== null && mainsEstimate > 0) {
+    return `${formatW(mainsEstimate)} of the socket-measured demand is not supplied by the Solarbank. This is a calculated mains estimate, not a grid reading.`;
+  }
   if (s.homeSource === "sockets" && s.unmeteredW > 0) {
     return `${formatW(s.unmeteredW)} of the output is not covered by the sockets: the custom-mode baseline plus anything on an unmetered circuit.`;
   }
   if (!s.gridMeasured) {
-    return "Grid reads AC output, not a meter: what the Solarbank sends to the house.";
+    return "Grid flow is unavailable without a Smart Meter. Solarbank output is not a grid reading.";
   }
   return "";
 }

@@ -20,17 +20,8 @@ const HUB_R = 96;
 const NODE_R = 56;
 const ORBIT = 242;
 
-/**
- * The supply row sits above the cross rather than on it.
- *
- * Solar and the mains are two sources of the same thing, so they share a row,
- * stay centred as a block on the hub, and merge into one stem before they
- * reach it. A Smart Meter, when there is one to read, joins the same row
- * without the rest of the diagram moving.
- */
 const SUPPLY_Y = CY - 292;
 const SUPPLY_DX = 78;
-/** Half way between the foot of the supply row and the top of the hub. */
 const JUNCTION_Y = (SUPPLY_Y + NODE_R + 10 + (CY - HUB_R - 10)) / 2;
 
 const NODES = {
@@ -38,6 +29,7 @@ const NODES = {
   acin: { angle: -90, label: "AC input", color: "var(--grid-series)", Icon: IconGrid },
   home: { angle: 0, label: "Home", color: "var(--home)", Icon: IconHome },
   battery: { angle: 90, label: "Battery", color: "var(--battery)", Icon: IconBattery },
+  acout: { angle: 180, label: "AC output", color: "var(--grid-series)", Icon: IconGrid },
   grid: { angle: 180, label: "Grid", color: "var(--grid-series)", Icon: IconGrid },
 };
 
@@ -179,21 +171,14 @@ function Ticks({ soc }: { soc: number }) {
 }
 
 /**
- * The supply row: solar, the mains, and the single stem they merge into.
- *
- * Each branch carries its own dashes, so the movement starts at whichever
- * source is actually delivering - solar by day, the mains once the battery is
- * at its floor - and the stem below the junction carries the sum.
+ * Socket mode exposes the Solarbank's own AC interfaces. Input is derived
+ * from the socket total minus output, while output is measured directly.
+ * Once a Smart Meter is present, this pair gives way to its true grid flow.
  */
-function Supply({ solarW, mainsW }: { solarW: number; mainsW: number | null }) {
-  const paired = mainsW !== null;
+function AcInterfaces({ solarW, inputW }: { solarW: number; inputW: number | null }) {
+  const paired = inputW !== null;
   const solarAt = { x: paired ? CX - SUPPLY_DX : CX, y: SUPPLY_Y };
-  const mainsAt = { x: CX + SUPPLY_DX, y: SUPPLY_Y };
-
-  // Both branches leave their node heading straight down and arrive at the
-  // junction heading straight down too, so they meet the stem tangentially
-  // rather than kinking into it. Unpaired, the control points collapse onto
-  // the centreline and this is simply a straight spoke.
+  const inputAt = { x: CX + SUPPLY_DX, y: SUPPLY_Y };
   const branch = (from: { x: number; y: number }) => {
     const y0 = from.y + NODE_R + 10;
     const drop = JUNCTION_Y - y0;
@@ -202,21 +187,20 @@ function Supply({ solarW, mainsW }: { solarW: number; mainsW: number | null }) {
       `C ${from.x} ${y0 + drop * 0.55}, ${CX} ${JUNCTION_Y - drop * 0.5}, ${CX} ${JUNCTION_Y}`
     );
   };
-
-  const total = solarW + (mainsW ?? 0);
-  const stemColor = (mainsW ?? 0) > solarW ? NODES.acin.color : NODES.solar.color;
+  const total = solarW + (inputW ?? 0);
+  const stemColor = (inputW ?? 0) > solarW ? NODES.acin.color : NODES.solar.color;
 
   return (
     <g>
       <Wire d={branch(solarAt)} color={NODES.solar.color} watts={solarW} />
-      {paired && <Wire d={branch(mainsAt)} color={NODES.acin.color} watts={mainsW} />}
+      {paired && <Wire d={branch(inputAt)} color={NODES.acin.color} watts={inputW} />}
       <Wire
         d={`M ${CX} ${JUNCTION_Y} L ${CX} ${CY - HUB_R - 10}`}
         color={stemColor}
         watts={total}
       />
       <Node nodeKey="solar" watts={solarW} at={solarAt} />
-      {paired && <Node nodeKey="acin" watts={mainsW} at={mainsAt} />}
+      {paired && <Node nodeKey="acin" watts={inputW} at={inputAt} />}
     </g>
   );
 }
@@ -239,12 +223,15 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
 
   const fromMains = mainsInputW(snapshot);
 
-  // Solar is not here: it lives in the supply row with its own branch.
   const links: Link[] = [
     // batteryW > 0 is charging, i.e. hub -> battery.
     { node: "battery", watts: batteryW, inbound: batteryW < 0 },
-    // gridW > 0 is importing, i.e. grid -> hub.
-    { node: "grid", watts: gridW, inbound: gridW > 0 },
+      ...(gridMeasured
+        ? [
+            { node: "solar" as const, watts: solarTotal, inbound: true },
+            { node: "grid" as const, watts: gridW, inbound: gridW > 0 },
+          ]
+        : [{ node: "acout" as const, watts: snapshot.acOutW, inbound: false }]),
     { node: "home", watts: homeKnown ? homeW : 0, inbound: false },
   ];
 
@@ -258,8 +245,11 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
         aria-label={
           `Battery ${soc} percent, ${batteryStatus} at ${formatW(Math.abs(batteryW))}. ` +
           `Solar ${formatW(solarTotal)}. Home ${homeKnown ? formatW(homeW) : "not measured"}. ` +
-          `Grid ${gridW >= 0 ? "importing" : "exporting"} ${formatW(Math.abs(gridW))}.` +
-          (fromMains !== null ? ` AC input ${formatW(fromMains)}.` : "")
+          (gridMeasured
+            ? `Grid ${gridW >= 0 ? "importing" : "exporting"} ${formatW(Math.abs(gridW))}.`
+            : fromMains !== null
+              ? `AC input ${formatW(fromMains)}, derived from socket measurements. AC output ${formatW(Math.abs(snapshot.acOutW))}.`
+              : "Grid flow is not measured.")
         }
       >
         <defs>
@@ -271,8 +261,7 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
         </defs>
         <circle cx={CX} cy={CY} r={ORBIT} fill="url(#hub-glow)" />
 
-        <Supply solarW={solarTotal} mainsW={fromMains} />
-
+        {!gridMeasured && <AcInterfaces solarW={solarTotal} inputW={fromMains} />}
         {links.map((l) => (
           <LinkPath key={l.node} link={l} />
         ))}
@@ -292,17 +281,21 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
         <text x={CX} y={CY + 31} textAnchor="middle" className="hub-status" fill="var(--text-muted)">
           {batteryStatus}
         </text>
+        <text x={CX} y={CY - 48} textAnchor="middle" className="hub-system" fill="var(--text-muted)">
+          SOLARBANK
+        </text>
         {etaText && (
           <text x={CX} y={CY + 48} textAnchor="middle" className="hub-eta" fill="var(--text-muted)">
             {etaText}
           </text>
         )}
 
-        <Node
-          nodeKey="grid"
-          watts={gridW}
-          sub={gridMeasured ? (gridW >= 0 ? "from grid" : "to grid") : "ac output"}
-        />
+        {gridMeasured && <Node nodeKey="solar" watts={solarTotal} />}
+        {gridMeasured ? (
+          <Node nodeKey="grid" watts={gridW} sub={gridW >= 0 ? "Smart Meter · import" : "Smart Meter · export"} />
+        ) : (
+          <Node nodeKey="acout" watts={snapshot.acOutW} />
+        )}
         <Node
           nodeKey="home"
           watts={homeKnown ? homeW : null}

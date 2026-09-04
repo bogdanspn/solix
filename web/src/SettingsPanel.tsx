@@ -37,6 +37,7 @@ export function SettingsPanel({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, setPending] = useState<Record<string, number | string | boolean> | null>(null);
+  const [discarding, setDiscarding] = useState(false);
 
   // Track the device while the user has not touched anything, so the panel
   // reflects changes made in the phone app.
@@ -48,10 +49,10 @@ export function SettingsPanel({
     if (!open) return;
     // While the confirmation is up it owns Escape, so one press does not
     // dismiss both the dialog and the sheet behind it.
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !pending && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !pending && requestClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, pending]);
+  }, [open, pending, dirty]);
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -63,6 +64,21 @@ export function SettingsPanel({
     setDraft(settings);
     setDirty(false);
     setResult(null);
+  };
+
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty) {
+      setDiscarding(true);
+      return;
+    }
+    onClose();
+  };
+
+  const discard = () => {
+    setDiscarding(false);
+    reset();
+    onClose();
   };
 
   const apply = () => {
@@ -112,7 +128,7 @@ export function SettingsPanel({
 
   return (
     <>
-      <div className={`scrim ${open ? "is-open" : ""}`} onClick={onClose} aria-hidden />
+      <div className={`scrim ${open ? "is-open" : ""}`} onClick={requestClose} aria-hidden />
       <aside
         className={`sheet ${open ? "is-open" : ""}`}
         role="dialog"
@@ -121,7 +137,7 @@ export function SettingsPanel({
       >
         <div className="sheet-head">
           <h2>Settings</h2>
-          <button className="icon-btn" onClick={onClose} title="Close">
+          <button className="icon-btn" onClick={requestClose} title="Close">
             <IconClose size={17} />
           </button>
         </div>
@@ -206,8 +222,8 @@ export function SettingsPanel({
           <button className="btn" onClick={apply} disabled={!dirty || busy}>
             {busy ? "Writing…" : "Apply"}
           </button>
-          <button className="btn secondary" onClick={dirty ? reset : onClose} disabled={busy}>
-            {dirty ? "Discard" : "Close"}
+          <button className="btn secondary" onClick={dirty ? reset : requestClose} disabled={busy}>
+            {dirty ? "Reset" : "Close"}
           </button>
         </div>
       </aside>
@@ -223,6 +239,17 @@ export function SettingsPanel({
       >
         This changes how the battery behaves:{" "}
         <strong>{Object.keys(pending ?? {}).join(", ").replace(/_/g, " ")}</strong>.
+      </Confirm>
+
+      <Confirm
+        open={discarding}
+        title="Discard unsaved changes?"
+        confirmLabel="Discard"
+        danger
+        onConfirm={discard}
+        onCancel={() => setDiscarding(false)}
+      >
+        Your edited battery limits have not been written to the Solarbank.
       </Confirm>
     </>
   );
