@@ -148,11 +148,11 @@ type Environment = Record<
 
 const ENVIRONMENTS: Record<"dark" | "light", Environment> = {
   dark: {
-    sky: [new THREE.Color(0x0c0d0f), new THREE.Color(0x111318), new THREE.Color(0x040711)],
-    fog: [new THREE.Color(0x0c0d0f), new THREE.Color(0x101216), new THREE.Color(0x060914)],
-    ground: [new THREE.Color(0x3c4450), new THREE.Color(0x5b4a4b), new THREE.Color(0x293447)],
-    cloud: [new THREE.Color(0x68758b), new THREE.Color(0x8c757e), new THREE.Color(0x93a5c0)],
-    cloudLow: [new THREE.Color(0x2e3846), new THREE.Color(0x46363e), new THREE.Color(0x47566f)],
+    sky: [new THREE.Color(0x0c0d0f), new THREE.Color(0x111318), new THREE.Color(0x101214)],
+    fog: [new THREE.Color(0x0c0d0f), new THREE.Color(0x101216), new THREE.Color(0x121315)],
+    ground: [new THREE.Color(0x3c4450), new THREE.Color(0x5b4a4b), new THREE.Color(0x3e4248)],
+    cloud: [new THREE.Color(0x68758b), new THREE.Color(0x8c757e), new THREE.Color(0x74787d)],
+    cloudLow: [new THREE.Color(0x2e3846), new THREE.Color(0x46363e), new THREE.Color(0x464a50)],
   },
   light: {
     // Dusk dims the background rather than warming it. A warm sky and fog
@@ -172,7 +172,14 @@ const ENVIRONMENTS: Record<"dark" | "light", Environment> = {
 const LIGHT_NIGHT_KEY = new THREE.Color(0xdce4ed);
 const LIGHT_NIGHT_HEMI_SKY = new THREE.Color(0xd7dfe9);
 const LIGHT_NIGHT_HEMI_GROUND = new THREE.Color(0x939aa3);
-const DARK_NIGHT_KEY = new THREE.Color(0x9cb2d0);
+const DARK_NIGHT_KEY = new THREE.Color(0xc7cbcf);
+const DARK_NIGHT_HEMI_SKY = new THREE.Color(0x8c9096);
+const DARK_NIGHT_HEMI_GROUND = new THREE.Color(0x111315);
+const DARK_NIGHT_WALL = new THREE.Color(0x687077);
+const DARK_NIGHT_ROOF = new THREE.Color(0x363b41);
+const DARK_NIGHT_TRIM = new THREE.Color(0x363c43);
+const DARK_NIGHT_FRAME = new THREE.Color(0x737a82);
+const DARK_NIGHT_PLINTH = new THREE.Color(0x3c4249);
 
 const RAY_COUNT = 260;
 
@@ -2397,18 +2404,6 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-    // Parallax: the scene drifts slower than the page, so the header has depth
-    // behind the cards scrolling over it.
-    let parallax = 0;
-    const onScroll = () => {
-      parallax = Math.min(window.scrollY, 900) * 0.28;
-      renderer.domElement.style.transform = "translate3d(0, " + parallax + "px, 0)";
-    };
-    if (!reduced.matches) {
-      window.addEventListener("scroll", onScroll, { passive: true });
-      onScroll();
-    }
-
     // A shallow lean that follows the pointer. Small on purpose: enough to
     // give the scene some parallax against a flat page, not enough to leave
     // the composition the framing was chosen for.
@@ -2494,6 +2489,14 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       if (pal === LIGHT) {
         hemi.color.copy(new THREE.Color(pal.hemiSky)).lerp(LIGHT_NIGHT_HEMI_SKY, nightAmount);
         hemi.groundColor.copy(new THREE.Color(pal.hemiGround)).lerp(LIGHT_NIGHT_HEMI_GROUND, nightAmount);
+      } else {
+        hemi.color.copy(new THREE.Color(pal.hemiSky)).lerp(DARK_NIGHT_HEMI_SKY, nightAmount);
+        hemi.groundColor.copy(new THREE.Color(pal.hemiGround)).lerp(DARK_NIGHT_HEMI_GROUND, nightAmount);
+        wallMat.color.copy(new THREE.Color(pal.wall)).lerp(DARK_NIGHT_WALL, nightAmount);
+        roofMat.color.copy(new THREE.Color(pal.roof)).lerp(DARK_NIGHT_ROOF, nightAmount);
+        trimMat.color.copy(new THREE.Color(pal.trim)).lerp(DARK_NIGHT_TRIM, nightAmount);
+        frameMat.color.copy(new THREE.Color(pal.frame)).lerp(DARK_NIGHT_FRAME, nightAmount);
+        plinthMat.color.copy(new THREE.Color(pal.plinth)).lerp(DARK_NIGHT_PLINTH, nightAmount);
       }
       const nightLightLevel = pal === LIGHT ? 0.32 : 0.48;
       const nightHemiLevel = pal === LIGHT ? 0.42 : 0.68;
@@ -2602,7 +2605,6 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     return () => {
       cancelAnimationFrame(frame);
       timer.dispose();
-      window.removeEventListener("scroll", onScroll);
       window.removeEventListener("pointermove", onPointer);
       observer.disconnect();
       for (const d of disposables) d.dispose();
