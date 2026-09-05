@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DayForecast, HourPoint, Place, WeatherReport } from "../../server/weather.ts";
-import { IconCloud, IconDrop, IconPin, IconSun } from "./Icons.tsx";
+import { IconDrop, IconPin, IconSun } from "./Icons.tsx";
 import { weatherLook } from "./WeatherIcon.tsx";
 import { Modal } from "./Modal.tsx";
 
@@ -214,8 +214,7 @@ export function Weather({
   needsLocation,
   error,
   adopt,
-  onReviewSettings,
-}: WeatherState & { onReviewSettings: () => void }) {
+}: WeatherState) {
   const [picking, setPicking] = useState(false);
 
   const peak = report ? Math.max(...report.days.map((d) => d.solarKwhM2), 0.1) : 1;
@@ -229,23 +228,15 @@ export function Weather({
     else byDate.set(key, [h]);
   }
   const peakRadiation = Math.max(...(report?.hours ?? []).map((h) => h.radiation), 100);
-  const tomorrow = report?.days[1];
-  const strategy = !tomorrow
-    ? null
-    : tomorrow.solarKwhM2 >= 4
-      ? { label: "Lean on the battery tonight", detail: "A strong solar refill is expected tomorrow.", tone: "sun" }
-      : tomorrow.solarKwhM2 >= 2.5
-        ? { label: "Use a moderate reserve", detail: "Tomorrow should recover a normal overnight draw.", tone: "steady" }
-        : { label: "Protect your reserve tonight", detail: "Tomorrow's solar window looks limited.", tone: "reserve" };
 
   // The header and the body both stay mounted whatever the state, so setting or
   // changing a location never resizes the card underneath the dialog.
   return (
     <>
       <div className="chart-head">
-        <h2 className="eyebrow" style={{ margin: 0 }}>
+        <div className="card-title"><IconSun size={17} /><h2>
           Forecast{report && ` · ${report.place.name}`}
-        </h2>
+        </h2></div>
         <div className="head-actions">
           {report && (
             <span className="sub-total">
@@ -280,18 +271,6 @@ export function Weather({
         </div>
       ) : (
         <>
-          {strategy && (
-            <div className={`forecast-verdict is-${strategy.tone}`}>
-              <div>
-                <span className="eyebrow">Tonight's plan</span>
-                <strong>{strategy.label}</strong>
-                <p>{strategy.detail}</p>
-              </div>
-              <button className="forecast-action" onClick={onReviewSettings}>
-                Review limits
-              </button>
-            </div>
-          )}
           <div className="days">
             {report.days.map((d, i) => {
               const hours = byDate.get(d.date) ?? [];
@@ -348,12 +327,6 @@ export function Weather({
             })}
           </div>
 
-          <div className="advice">
-            <span className="advice-ico">
-              {report.days[1] && report.days[1].solarKwhM2 >= 3 ? <IconSun size={16} /> : <IconCloud size={16} />}
-            </span>
-            <p>{report.advice}</p>
-          </div>
         </>
       )}
 

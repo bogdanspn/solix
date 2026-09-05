@@ -8,6 +8,30 @@ settings worth changing without reaching for the phone.
 Verified against a real system: a Solarbank 4 E5000 Pro (`AE103`, firmware
 `1.0.2.30`, 15.1 kWh) and nine Smart Plug Gen 2 units (`A17X8`).
 
+## Dashboard Views
+
+- Compact scene mode, socket pins, sort order, and history range are saved in
+  this browser. PV strings, system readings, socket details, tariff settings,
+  and timeline events open in dialogs without expanding dashboard panels.
+- History supports bounded dates, previous-period comparisons, daily energy
+  bars, linked interval selection, event markers, and JSON export. Comparisons
+  require at least 80% sample coverage. Daily bar tooltips show coverage.
+- Solar estimates calibrate recent PV readings against hourly forecast
+  irradiance. At least three sufficiently sampled daylight hours are required.
+  The displayed range is a scenario range, not a statistical confidence interval.
+  Sunset reserve assumes steady recent system demand and 90% charging efficiency;
+  shading, curtailment, scheduled charging, and changing demand can invalidate it.
+- Optional flat-rate tariff estimates cover socket consumption only, excluding
+  standing charges. They are not whole-home costs or solar savings estimates.
+
+Deploy the updated server as well as the frontend to enable dated history,
+daily bars, coverage comparisons, and recorded connectivity/mode events.
+Events start when the updated server runs; historical recording gaps are not
+proof of a device outage. No device settings are changed automatically.
+
+Run `npm run check-dashboard` and `npm run check-history` for the focused checks.
+The history check uses an in-memory database and does not connect to hardware.
+
 ## Setup
 
 **1. Enable Modbus TCP on the device** (once, in the Anker app):

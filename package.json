@@ -15,6 +15,8 @@
     "rescan": "tsx scripts/probe.ts",
     "explore": "tsx scripts/explore.ts",
     "check-flow": "tsx scripts/check-flow.ts",
+    "check-dashboard": "tsx scripts/check-dashboard.tsx",
+    "check-history": "tsx scripts/check-history.ts",
     "poll-timing": "tsx scripts/poll-timing.ts",
     "learn-modes": "tsx scripts/learn-modes.ts",
     "check-eta": "tsx scripts/check-eta.ts",

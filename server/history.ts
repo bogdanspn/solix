@@ -6,10 +6,18 @@ import type { EnergyTotals, HistoryPoint, HistoryResponse, Snapshot } from "./ty
 const DATA_DIR = path.resolve(import.meta.dirname, "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new DatabaseSync(path.join(DATA_DIR, "history.db"));
+const db = new DatabaseSync(process.env["SOLIX_HISTORY_FILE"] ?? path.join(DATA_DIR, "history.db"));
 
 db.exec(`
   PRAGMA journal_mode = WAL;
+
+  CREATE TABLE IF NOT EXISTS timeline_events (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS timeline_events_ts ON timeline_events(ts);
 
   CREATE TABLE IF NOT EXISTS samples (
     ts                  INTEGER PRIMARY KEY,  -- unix seconds
@@ -152,9 +160,10 @@ const RANGES = {
 
 export type Range = keyof typeof RANGES;
 
-export function history(range: Range): HistoryResponse {
+export function history(range: Range, endMs = Date.now()): HistoryResponse {
   const { seconds, bucket } = RANGES[range];
-  const since = Math.floor(Date.now() / 1000) - seconds;
+  const until = Math.floor(Math.min(endMs, Date.now()) / 1000);
+  const since = until - seconds;
 
   // Bucket in SQL so a month of 30s samples never crosses the wire.
   const rows = db
@@ -166,11 +175,11 @@ export function history(range: Range): HistoryResponse {
               AVG(grid_w)    AS grid_w,
               AVG(soc)       AS soc
        FROM samples
-       WHERE ts >= ?
+      WHERE ts >= ? AND ts < ?
        GROUP BY bucket_ts
        ORDER BY bucket_ts`,
     )
-    .all(bucket, bucket, since) as Array<Record<string, number>>;
+    .all(bucket, bucket, since, until) as Array<Record<string, number>>;
 
   const points: HistoryPoint[] = rows.map((r) => ({
     ts: (r["bucket_ts"] ?? 0) * 1000,
@@ -181,7 +190,62 @@ export function history(range: Range): HistoryResponse {
     soc: Math.round(r["soc"] ?? 0),
   }));
 
-  return { range, points, totals: totalsSince(since) };
+  const daily: NonNullable<HistoryResponse["daily"]> = [];
+  let cursor = since;
+  while (cursor < until) {
+    const day = new Date(cursor * 1000);
+    const next = new Date(day);
+    next.setHours(24, 0, 0, 0);
+    const end = Math.min(until, next.getTime() / 1000);
+    daily.push({ date: localDay(day), ...totalsSince(cursor, end), coverage: coverage(cursor, end) });
+    cursor = end;
+  }
+  const now = new Date();
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
+  const yesterday = new Date(midnight); yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayEnd = new Date(now); yesterdayEnd.setDate(yesterdayEnd.getDate() - 1);
+  const timeline = db.prepare("SELECT ts, kind, label FROM timeline_events WHERE ts >= ? AND ts < ? ORDER BY ts")
+    .all(since * 1000, until * 1000) as Array<{ ts: number; kind: string; label: string }>;
+  for (let index = 1; index < points.length; index++) {
+    if (points[index]!.ts - points[index - 1]!.ts > bucket * 1500) {
+      timeline.push({ ts: points[index]!.ts, kind: "gap", label: "Recording resumed after a gap" });
+    }
+  }
+  return {
+    range, points, totals: totalsSince(since, until), today: todayTotals(), daily,
+    window: { start: since * 1000, end: until * 1000, coverage: coverage(since, until) },
+    previous: { totals: totalsSince(since - seconds, since), coverage: coverage(since - seconds, since) },
+    sameTimeYesterday: {
+      totals: totalsSince(yesterday.getTime() / 1000, yesterdayEnd.getTime() / 1000),
+      coverage: coverage(yesterday.getTime() / 1000, yesterdayEnd.getTime() / 1000),
+      todayCoverage: coverage(midnight.getTime() / 1000, now.getTime() / 1000),
+    },
+    events: timeline.sort((first, second) => first.ts - second.ts),
+  };
+}
+
+function coverage(start: number, end: number): number {
+  if (end <= start) return 0;
+  const rows = db.prepare("SELECT ts FROM samples WHERE ts >= ? AND ts < ? ORDER BY ts").all(start, end) as Array<{ ts: number }>;
+  let covered = 0;
+  for (let index = 1; index < rows.length; index++) {
+    const gap = rows[index]!.ts - rows[index - 1]!.ts;
+    if (gap <= 120) covered += gap;
+  }
+  return Math.min(1, covered / (end - start));
+}
+
+let previousState: { online: boolean; mode: string } | null = null;
+export function recordStateEvent(snapshot: Snapshot | null): void {
+  if (!snapshot) return;
+  const insert = db.prepare("INSERT INTO timeline_events (ts, kind, label) VALUES (?, ?, ?)");
+  const now = Date.now();
+  if (!previousState) insert.run(now, "monitoring", "Monitoring started");
+  else {
+    if (previousState.online !== snapshot.online) insert.run(now, "connection", snapshot.online ? "Device connection restored" : "Device connection lost");
+    if (snapshot.online && previousState.mode !== snapshot.operatingMode) insert.run(now, "mode", `Mode: ${snapshot.operatingMode.replace(/_/g, " ")}`);
+  }
+  previousState = { online: snapshot.online, mode: snapshot.online ? snapshot.operatingMode : previousState?.mode ?? snapshot.operatingMode };
 }
 
 /**
@@ -194,13 +258,13 @@ export function history(range: Range): HistoryResponse {
  * the non-negative deltas, which drops the reset step instead of emitting a
  * large negative number.
  */
-export function totalsSince(sinceSeconds: number): EnergyTotals {
+export function totalsSince(sinceSeconds: number, untilSeconds = Number.MAX_SAFE_INTEGER): EnergyTotals {
   const rows = db
     .prepare(
       `SELECT pv_total_kwh, charge_total_kwh, discharge_total_kwh
-       FROM samples WHERE ts >= ? ORDER BY ts`,
+      FROM samples WHERE ts >= ? AND ts < ? ORDER BY ts`,
     )
-    .all(sinceSeconds) as Array<Record<string, number>>;
+    .all(sinceSeconds, untilSeconds) as Array<Record<string, number>>;
 
   const totals: EnergyTotals = { pvKwh: 0, chargeKwh: 0, dischargeKwh: 0 };
   const cols: Array<[keyof EnergyTotals, string]> = [

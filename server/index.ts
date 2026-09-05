@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.ts";
 import { events, getDevice, getLatest, rediscover, startPolling } from "./poll.ts";
-import { history, peakPvW, sampleCount, todayTotals, type Range } from "./history.ts";
+import { history, peakPvW, recordStateEvent, sampleCount, todayTotals, type Range } from "./history.ts";
 import { isWritableKey, writeSetting } from "./control.ts";
 import { OPERATING_MODE, OPERATING_MODE_LABELS } from "./registers.ts";
 import { plugHosts, setPlugHosts, setPlugName, setPlugSwitch } from "./plugs.ts";
@@ -16,6 +16,9 @@ const app = express();
 app.use(express.json());
 
 const ROOT = path.resolve(import.meta.dirname, "..");
+events.on("snapshot", (snapshot: Snapshot | null) => {
+  try { recordStateEvent(snapshot); } catch (error) { console.warn("[history events]", error); }
+});
 
 app.get("/api/device", (_req, res) => {
   const device = getDevice();
@@ -72,7 +75,12 @@ app.get("/api/history", (req, res) => {
     res.status(400).json({ error: "range must be day, week or month" });
     return;
   }
-  res.json({ ...history(range as Range), today: todayTotals() });
+  const end = req.query["end"] === undefined ? Date.now() : Number(req.query["end"]);
+  if (!Number.isFinite(end) || end <= 0 || end > Date.now() + 60_000) {
+    res.status(400).json({ error: "end must be a past Unix timestamp in milliseconds" });
+    return;
+  }
+  res.json(history(range as Range, end));
 });
 
 app.get("/api/settings", (_req, res) => {

@@ -1,15 +1,18 @@
+import { useCallback, useState } from "react";
+import { Modal } from "./Modal.tsx";
 import type { EnergyTotals, Snapshot } from "../../server/types.ts";
 import {
   IconBattery,
   IconGrid,
   IconHeart,
   IconHome,
+  IconInfo,
   IconSun,
   IconThermometer,
   IconWave,
 } from "./Icons.tsx";
 import { netAcOutputW } from "./derive.ts";
-import { formatW } from "./format.ts";
+import { formatDuration, formatEnergy, formatW } from "./format.ts";
 
 function split(w: number): [string, string] {
   const text = formatW(Math.abs(w));
@@ -90,36 +93,43 @@ export function Readings({
   today: EnergyTotals;
   device: { ratedKwh: number; packs: number } | null;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const closeDetails = useCallback(() => setDetailsOpen(false), []);
   const [solarV, solarU] = split(snapshot.pvW + snapshot.thirdPartyPvW);
-  const [batV, batU] = split(snapshot.batteryW);
   const [homeV, homeU] = split(snapshot.homeW);
   const [gridV, gridU] = split(snapshot.gridW);
   const homeKnown = snapshot.homeSource !== "none";
   const netAc = netAcOutputW(snapshot);
   const [netAcV, netAcU] = split(netAc ?? 0);
 
-  const pv = today.pvKwh;
-  const charge = today.chargeKwh;
-  // Charging beyond what the array made can only have come off the mains, so
-  // the stored figure is clamped and the excess named rather than folded in.
-  const stored = Math.min(charge, pv);
-  const direct = Math.max(0, pv - charge);
-  const fromGrid = Math.max(0, charge - pv);
-  const socketsKwh = snapshot.plugs.reduce((sum, p) => sum + p.todayKwh, 0);
+  const soc = Math.max(0, Math.min(100, snapshot.soc));
+  const floor = snapshot.settings.dischargeLimitSoc;
+  const charging = snapshot.batteryW > 0;
+  const status = snapshot.batteryW === 0 ? "Idle" : charging ? "Charging" : "Discharging";
+  const etaMatches = snapshot.batteryW !== 0 && snapshot.eta.direction === (charging ? "charge" : "discharge");
 
   return (
-    <div className="readings">
-      <h2 className="eyebrow">Right now</h2>
-
+    <div className="readings battery-overview">
+      <div className="chart-head"><div className="card-title"><IconBattery size={17} /><h2>Battery</h2></div><span className="sub-total">{device ? `${device.ratedKwh.toFixed(1)} kWh capacity` : "Capacity unavailable"}</span></div>
+      <div className="battery-overview-level">
+        <strong>{Math.round(soc)}<small>%</small></strong>
+        <div><span>{snapshot.online ? status : "Last reading"}</span><b>{formatW(Math.abs(snapshot.batteryW))}</b></div>
+      </div>
+      <div className="battery-reserve-track" role="meter" aria-label="Battery charge" aria-valuemin={0} aria-valuemax={100} aria-valuenow={soc}>
+        <span style={{ width: `${soc}%` }} />
+        <i style={{ left: `${Math.max(0, Math.min(100, floor))}%` }} />
+      </div>
+      <div className="battery-limits"><span>Minimum {floor}%</span><span>Charge limit {snapshot.settings.chargingLimitSoc}%</span></div>
+      <p className="battery-outlook">
+        {!snapshot.online || snapshot.staleSeconds > 20 ? "Waiting for current readings"
+          : snapshot.eta.minutes !== null && etaMatches
+            ? `${snapshot.eta.targetSoc}% in about ${formatDuration(snapshot.eta.minutes)}`
+            : "No reliable time estimate"}
+        {snapshot.online && snapshot.staleSeconds <= 20 && etaMatches && charging && snapshot.eta.minutes !== null && snapshot.eta.beforeSunset === false && <span>At this rate, after sunset</span>}
+      </p>
+      <div className="battery-power-readings">
       <div className="rows">
         <Row icon={<IconSun size={17} />} color="var(--solar)" label="Solar" value={solarV} unit={solarU} />
-        <Row
-          icon={<IconBattery size={17} />}
-          color="var(--battery)"
-          label={snapshot.batteryW >= 0 ? "Battery charging" : "Battery discharging"}
-          value={batV}
-          unit={batU}
-        />
         <Row
           icon={<IconHome size={17} />}
           color="var(--home)"
@@ -157,16 +167,17 @@ export function Readings({
         )}
       </div>
 
-      <h2 className="eyebrow">Today</h2>
-      <div className="cells">
-        <Cell label="Out" value={today.dischargeKwh.toFixed(1)} unit="kWh" />
-        <Cell label="In" value={today.chargeKwh.toFixed(1)} unit="kWh" />
-        <Cell label="Solar" value={today.pvKwh.toFixed(1)} unit="kWh" />
       </div>
-
+      <div className="battery-day-totals">
+        <div><span>Charged today</span><strong>{formatEnergy(today.chargeKwh)}</strong></div>
+        <div><span>Discharged today</span><strong>{formatEnergy(today.dischargeKwh)}</strong></div>
+      </div>
+      <button className="detail-trigger" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">System details <IconInfo size={16} /></button>
+      <Modal open={detailsOpen} title="System details" onClose={closeDetails}>
+      <div className="system-details">
       {/* Frequency and voltage were confirmed live by sampling; temperature and
           health decode plausibly but are unproven, so they are marked. */}
-      <h2 className="eyebrow">System</h2>
+      <h3 className="eyebrow">Electrical &amp; device</h3>
       <div className="cells">
         <Cell icon={<IconWave size={12} />} label="Frequency" value={snapshot.gridHz.toFixed(2)} unit="Hz" />
         <Cell icon={<IconGrid size={12} />} label="Voltage" value={snapshot.acVolts.toFixed(1)} unit="V" />
@@ -186,7 +197,7 @@ export function Readings({
         />
         <Cell label="Max from grid" value={(snapshot.gridImportLimitW / 1000).toFixed(1)} unit="kW" />
         <Cell label="Max to grid" value={(snapshot.gridExportLimitW / 1000).toFixed(1)} unit="kW" />
-        <Cell label="Capacity" value={(device?.ratedKwh ?? 0).toFixed(1)} unit="kWh" />
+        <Cell label="Capacity" value={device ? device.ratedKwh.toFixed(1) : "--"} unit="kWh" />
         {device && device.packs > 0 && (
           <Cell
             label="Packs"
@@ -197,42 +208,8 @@ export function Readings({
         )}
       </div>
 
-      {pv > 0.05 && (
-        <div className="destination">
-          <h2 className="eyebrow">Where today&rsquo;s solar went</h2>
-          <div className="dest-bar">
-            {stored > 0 && (
-              <span
-                className="dest-seg is-stored"
-                style={{ flexGrow: stored }}
-                title={`${stored.toFixed(1)} kWh charged into the battery`}
-              />
-            )}
-            {direct > 0 && (
-              <span
-                className="dest-seg is-direct"
-                style={{ flexGrow: direct }}
-                title={`${direct.toFixed(1)} kWh generated but not stored`}
-              />
-            )}
-          </div>
-          <div className="dest-keys">
-            <span className="dest-key">
-              <i className="is-stored" />
-              Stored <b>{stored.toFixed(1)}</b> kWh
-            </span>
-            <span className="dest-key">
-              <i className="is-direct" />
-              Not stored <b>{direct.toFixed(1)}</b> kWh
-            </span>
-          </div>
-          <p className="dest-note">
-            {fromGrid > 0.05
-              ? `A further ${fromGrid.toFixed(1)} kWh went into the battery from the mains: charging exceeded what the array made.`
-              : `Not stored means it went to the house or was left on the table. Sockets measured ${socketsKwh.toFixed(1)} kWh today.`}
-          </p>
-        </div>
-      )}
+      </div>
+      </Modal>
     </div>
   );
 }

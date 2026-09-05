@@ -2,6 +2,9 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { DeviceInfo, EnergyTotals, Snapshot } from "../../server/types.ts";
 import { PowerFlow } from "./PowerFlow.tsx";
 import { Readings } from "./Readings.tsx";
+import { TodaySummary } from "./TodaySummary.tsx";
+import { Insights } from "./Insights.tsx";
+import { isBoolean, usePreference } from "./preferences.ts";
 import { HistoryCharts } from "./HistoryCharts.tsx";
 import { SettingsPanel } from "./SettingsPanel.tsx";
 import { Sockets } from "./Sockets.tsx";
@@ -9,7 +12,8 @@ import { Strings } from "./Strings.tsx";
 import { Weather, useWeather } from "./Weather.tsx";
 import { mainsInputW, netAcOutputW } from "./derive.ts";
 import { formatClock, formatDuration, formatW } from "./format.ts";
-import { IconBolt, IconMoon, IconSettings, IconSun } from "./Icons.tsx";
+import { IconBolt, IconInfo, IconMoon, IconSettings, IconSun } from "./Icons.tsx";
+import { Modal } from "./Modal.tsx";
 import { weatherLook } from "./WeatherIcon.tsx";
 
 const HouseScene = lazy(() =>
@@ -25,50 +29,54 @@ interface DeviceResponse {
   peakPvW: number;
 }
 
-function ConfidenceBand({ snapshot }: { snapshot: Snapshot }) {
-  const home =
-    snapshot.homeSource === "meter"
-      ? { label: "Household demand", value: "Smart Meter", detail: "Direct measurement", tone: "good" }
-      : snapshot.homeSource === "sockets"
-        ? {
-            label: "Household demand",
-            value: "Socket estimate",
-            detail: snapshot.unmeteredW > 0 ? `${formatW(snapshot.unmeteredW)} not covered` : "Covered by sockets",
-            tone: "warn",
-          }
-        : { label: "Household demand", value: "Not measured", detail: "Add a meter or sockets", tone: "critical" };
+function ConfidenceBand({ snapshot, connected }: { snapshot: Snapshot; connected: boolean }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const closeDetails = useCallback(() => setDetailsOpen(false), []);
+  const home = snapshot.homeSource === "meter" ? "Smart Meter" : snapshot.homeSource === "sockets" ? "Socket estimate" : "Not measured";
   const netAc = netAcOutputW(snapshot);
-  const grid = snapshot.gridMeasured
-    ? { value: "Grid measured", detail: "Import and export are live", tone: "good" }
+  const balance = snapshot.gridMeasured
+    ? <>{snapshot.gridW > 0 ? "Import" : snapshot.gridW < 0 ? "Export" : "Measured"} · <span className="confidence-value">{formatW(Math.abs(snapshot.gridW))}</span></>
     : netAc !== null
-      ? { value: "AC net calculated", detail: "AC output minus socket use", tone: "warn" }
-      : { value: "AC output only", detail: "Grid flow needs a Smart Meter", tone: "warn" };
-  const freshness = snapshot.online && snapshot.staleSeconds <= 20
-    ? { value: "Live", detail: "Reading every 5 seconds", tone: "good" }
-    : { value: "Last known reading", detail: `${snapshot.staleSeconds}s old`, tone: "critical" };
+      ? <>Calculated · <span className="confidence-value">{netAc > 0 ? "+" : netAc < 0 ? "-" : ""}{formatW(Math.abs(netAc))}</span></>
+      : "Output only";
+  const offline = !snapshot.online || !connected;
+  const stale = snapshot.staleSeconds > 20;
+  const status = offline ? "Offline" : stale ? "Stale" : "Live";
+  const age = formatDuration(Math.max(0, Math.round(snapshot.staleSeconds / 60)));
+  const freshness = snapshot.staleSeconds < 60 ? `${Math.max(0, Math.round(snapshot.staleSeconds))}s ago` : `${age} ago`;
 
   return (
+    <>
     <section className="confidence-band" aria-label="Measurement confidence">
-      <div className="confidence-intro">
-        <span className="eyebrow">System confidence</span>
-        <p>Know what each number represents.</p>
+      <div className="confidence-item">
+        <span className="confidence-label">Household</span>
+        <strong>{home}</strong>
       </div>
-      <div className={`confidence-item is-${home.tone}`}>
-        <span className="confidence-label">{home.label}</span>
-        <strong>{home.value}</strong>
-        <small>{home.detail}</small>
+      <div className="confidence-item">
+        <span className="confidence-label">{snapshot.gridMeasured ? "Grid" : "AC balance"}</span>
+        <strong>{balance}</strong>
       </div>
-      <div className={`confidence-item is-${grid.tone}`}>
-        <span className="confidence-label">Grid flow</span>
-        <strong>{grid.value}</strong>
-        <small>{grid.detail}</small>
+      <div className={`confidence-item is-${offline ? "critical" : stale ? "warn" : "good"}`}>
+        <span className="confidence-label">Connection</span>
+        <strong>{status}<span className="confidence-age"> · {freshness}</span></strong>
       </div>
-      <div className={`confidence-item is-${freshness.tone}`}>
-        <span className="confidence-label">Data freshness</span>
-        <strong>{freshness.value}</strong>
-        <small>{freshness.detail}</small>
-      </div>
+      <button className="icon-btn confidence-info" title="About these measurements" aria-label="About these measurements" aria-haspopup="dialog" onClick={() => setDetailsOpen(true)}>
+        <IconInfo size={18} />
+      </button>
     </section>
+    <Modal open={detailsOpen} title="About these measurements" onClose={closeDetails}>
+      <dl className="measurement-definitions">
+        <dt>Household</dt>
+        <dd>A Smart Meter measures whole-home demand. A socket estimate totals monitored sockets only; it cannot establish consumption elsewhere in the home.</dd>
+        <dt>AC balance</dt>
+        <dd>Calculated from Solarbank AC output minus monitored socket demand. Positive means output exceeds those sockets; negative means their demand exceeds output. This is not a measurement of grid import, export, or unmonitored consumption.</dd>
+        <dt>Grid</dt>
+        <dd>Shown only when a Smart Meter supplies a direct reading. Import draws from the grid; export sends power to it. Without socket readings or a meter, only Solarbank AC output is available.</dd>
+        <dt>Connection</dt>
+        <dd>Live means the stream is connected, the device is online, and the last device reading is at most 20 seconds old. Stale or offline values are the last known readings.</dd>
+      </dl>
+    </Modal>
+    </>
   );
 }
 
@@ -123,6 +131,25 @@ export function App() {
   const [searching, setSearching] = useState(false);
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
   const weather = useWeather();
+  const [compact, setCompact] = usePreference("solix-compact", false, isBoolean);
+  const [stringsOpen, setStringsOpen] = useState(false);
+  const closeStrings = useCallback(() => setStringsOpen(false), []);
+  const [navMarker, setNavMarker] = useState<HTMLDivElement | null>(null);
+  const [navStuck, setNavStuck] = useState(false);
+  useEffect(() => {
+    if (!navMarker) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry) setNavStuck(!entry.isIntersecting && entry.boundingClientRect.top < 0);
+    });
+    observer.observe(navMarker);
+    return () => observer.disconnect();
+  }, [navMarker]);
+  const [section, setSection] = useState(() => window.location.hash.slice(1) || "overview");
+  useEffect(() => {
+    const updateSection = () => setSection(window.location.hash.slice(1) || "overview");
+    window.addEventListener("hashchange", updateSection);
+    return () => window.removeEventListener("hashchange", updateSection);
+  }, []);
 
   // The address can go stale on a DHCP change; the server also retries on its
   // own, but an offline dashboard should offer the button rather than just sit.
@@ -170,7 +197,7 @@ export function App() {
     snapshot.operatingMode.replace(/_/g, " ");
 
   return (
-    <div className={`app${theme === "light" && weather.report && !weather.report.now.isDay ? " is-light-night" : ""}`}>
+    <div className={`app${compact ? " is-compact" : ""}${theme === "light" && weather.report && !weather.report.now.isDay ? " is-light-night" : ""}`}>
       <header className="header">
         <div className="brand">
           <span className="mark">
@@ -235,7 +262,7 @@ export function App() {
         </div>
       )}
 
-      <Suspense fallback={<div className="house house-loading" aria-hidden />}>
+      {!compact && <Suspense fallback={<div className="house house-loading" aria-hidden />}>
         <HouseScene
           state={{
             batteryW: snapshot.batteryW,
@@ -265,30 +292,45 @@ export function App() {
               : null
           }
         />
-      </Suspense>
+      </Suspense>}
 
-      <ConfidenceBand snapshot={snapshot} />
+      <div ref={setNavMarker} className="nav-marker" aria-hidden="true" />
+      <nav className={`dashboard-nav${navStuck ? " is-stuck" : ""}`} aria-label="Dashboard sections">
+        <div>{["Overview", "Forecast", "Sockets", "History"].map((label) => <a key={label} href={`#${label.toLowerCase()}`} aria-current={section === label.toLowerCase() ? "location" : undefined}>{label}</a>)}</div>
+        <label className="compact-toggle"><span>Compact view</span><input type="checkbox" role="switch" checked={compact} onChange={(event) => setCompact(event.target.checked)} /><span className="compact-toggle-track" aria-hidden="true" /></label>
+      </nav>
+      <div id="overview" className="dashboard-anchor">
+      <TodaySummary snapshot={snapshot} today={snapshot.today} ratedKwh={info?.device.ratedKwh ?? null} />
+      <ConfidenceBand snapshot={snapshot} connected={connected} />
+      </div>
 
       <div className="layout">
         <section className="card flow-card">
-          {snapshot.pvW > 0 && <Strings strings={snapshot.strings} />}
+          <div className="chart-head"><div className="card-title"><IconBolt size={17} /><h2>Live power</h2></div><span className="sub-total">{snapshot.online ? "Live readings" : "Last readings"}</span></div>
+          <div className="flow-compact">
           <PowerFlow snapshot={snapshot} ratedKwh={info?.device.ratedKwh ?? 0} />
+          </div>
           <p className="footnote">{footnote(snapshot)}</p>
+          <button className="detail-trigger" onClick={() => setStringsOpen(true)} aria-haspopup="dialog">PV strings <span>{formatW(snapshot.pvW)}</span><IconInfo size={16} /></button>
+          <Modal open={stringsOpen} title="PV strings" onClose={closeStrings}>
+            <Strings strings={snapshot.strings} />
+          </Modal>
         </section>
 
-        <section className="card">
+        <section className="card battery-card">
           <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} />
         </section>
 
-        <section className="card span-2">
-          <Weather {...weather} onReviewSettings={() => setSettingsOpen(true)} />
+        <section className="card span-2 dashboard-anchor" id="forecast">
+          <Weather {...weather} />
+          {weather.report && <Insights snapshot={snapshot} report={weather.report} ratedKwh={info?.device.ratedKwh ?? null} onReviewSettings={() => setSettingsOpen(true)} />}
         </section>
 
-        <section className="card span-2">
+        <section className="card span-2 dashboard-anchor" id="sockets">
           <Sockets plugs={snapshot.plugs} onRenamed={refresh} />
         </section>
 
-        <section className="card span-2">
+        <section className="card span-2 dashboard-anchor" id="history">
           <HistoryCharts />
         </section>
 

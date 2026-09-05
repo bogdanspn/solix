@@ -25,6 +25,18 @@ function Svg({ size = 20, children, ...rest }: Props) {
   );
 }
 
+export const IconPrevious = (p: Props) => <Svg {...p}><path d="m12 4-6 6 6 6" /></Svg>;
+export const IconNext = (p: Props) => <Svg {...p}><path d="m8 4 6 6-6 6" /></Svg>;
+export const IconDownload = (p: Props) => <Svg {...p}><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4" /></Svg>;
+export const IconStar = (p: Props) => <Svg {...p}><path d="m10 2 2.4 5 5.6.8-4 4 .9 5.6-4.9-2.6-4.9 2.6.9-5.6-4-4 5.6-.8Z" /></Svg>;
+
+export const IconInfo = (p: Props) => (
+  <Svg {...p}>
+    <circle cx="10" cy="10" r="7.5" />
+    <path d="M10 9v5M10 6v.5" />
+  </Svg>
+);
+
 export const IconSun = (p: Props) => (
   <Svg {...p}>
     <circle cx="10" cy="10" r="3.6" />

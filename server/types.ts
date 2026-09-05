@@ -164,4 +164,9 @@ export interface HistoryResponse {
   points: HistoryPoint[];
   totals: EnergyTotals;
   today: EnergyTotals;
+  window?: { start: number; end: number; coverage: number };
+  daily?: Array<EnergyTotals & { date: string; coverage: number }>;
+  previous?: { totals: EnergyTotals; coverage: number };
+  sameTimeYesterday?: { totals: EnergyTotals; coverage: number; todayCoverage: number };
+  events?: Array<{ ts: number; kind: string; label: string }>;
 }

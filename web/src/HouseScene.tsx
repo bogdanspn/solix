@@ -215,12 +215,15 @@ const RAY_VERT = /* glsl */ `
   attribute float aEnd;
   attribute float aSide;
   attribute float aWidth;
+  attribute float aBeam;
+  varying float vBeam;
   varying float vFade;
   varying float vSide;
   varying float vHead;
 
   void main() {
     vSide = aSide;
+    vBeam = aBeam;
 
     // Fixed threshold per shaft: as output rises, more of them are drawn.
     if (aSeed > uAmount) {
@@ -229,9 +232,11 @@ const RAY_VERT = /* glsl */ `
     }
 
     float fall = mod(uTop - position.y + uPhase * (2.0 + aRate * 3.0), uSpan);
+    fall = mix(fall, uSpan - 0.3 - aRate * 0.6, aBeam);
 
     // Head of the shaft, drifting along the slant as it descends.
     vec3 head = vec3(position.x + fall * uSlant, uTop - fall, position.z);
+    head.x += aBeam * sin(uPhase * 0.18 + aRate * 6.28) * 0.18;
     // Tail trails back up the same line, so the streak lies along its travel.
     vec3 dir = normalize(vec3(uSlant, -1.0, 0.0));
     vec3 p = head - dir * (aEnd * aLen);
@@ -243,13 +248,14 @@ const RAY_VERT = /* glsl */ `
     float approach = smoothstep(0.05, 0.88, t);
     float cutoff = smoothstep(1.0, 0.94, t);
     vFade = (0.18 + approach * 0.82) * cutoff;
+    vFade = mix(vFade, 0.65 + 0.15 * sin(uPhase * 0.25 + aRate * 6.28), aBeam);
 
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     // Widen across the shaft in view space, so the quad always faces the
     // camera however the scene is tilted.
     vec3 dirView = normalize((modelViewMatrix * vec4(dir, 0.0)).xyz);
     vec2 across = normalize(vec2(-dirView.y, dirView.x));
-    mv.xy += across * (aSide * aWidth);
+    mv.xy += across * (aSide * aWidth * mix(1.0, mix(1.0, 0.3, aEnd), aBeam));
 
     gl_Position = projectionMatrix * mv;
   }
@@ -261,6 +267,7 @@ const RAY_FRAG = /* glsl */ `
   varying float vFade;
   varying float vSide;
   varying float vHead;
+  varying float vBeam;
 
   void main() {
     // Soft across the shaft, with a hot core: a flat band reads as a ribbon,
@@ -269,7 +276,9 @@ const RAY_FRAG = /* glsl */ `
     float body = pow(across, 1.7);
     float core = pow(across, 7.0);
     float lead = 0.75 + vHead * 0.45;
-    gl_FragColor = vec4(uColor * (1.0 + core * 1.4), (body * 0.72 + core * 0.9) * vFade * uOpacity * lead);
+    float feather = smoothstep(0.0, 0.18, vHead) * (1.0 - smoothstep(0.7, 1.0, vHead));
+    float alpha = mix((body * 0.72 + core * 0.9) * lead * 0.4, pow(across, 2.4) * feather * 1.8, vBeam);
+    gl_FragColor = vec4(uColor * (1.0 + core * mix(1.4, 0.15, vBeam)), alpha * vFade * uOpacity);
   }
 `;
 
@@ -357,9 +366,9 @@ const CONDUIT_FRAG = /* glsl */ `
 
 /** Which live figure drives each run, and the colour it glows. */
 const FLOW_GLOW = {
-  solar: 0xffc046,
-  grid: 0xff8f8f,
-  home: 0x76b8ff,
+  solar: 0x9bd5ff,
+  grid: 0x9bd5ff,
+  home: 0x9bd5ff,
 } as const;
 
 type FlowKey = keyof typeof FLOW_GLOW;
@@ -422,14 +431,14 @@ function branchOff(dir: THREE.Vector3, spread: number, azimuth: number): THREE.V
  * forks again, every limb curves as it goes, and leaves are only ever placed
  * where a limb runs out.
  */
-function growBroadleaf(): { limbs: Limb[]; tips: Tip[] } {
+function growBroadleaf(random: () => number, extraBranches = 0): { limbs: Limb[]; tips: Tip[] } {
   const limbs: Limb[] = [];
   const tips: Tip[] = [];
   const MAX_DEPTH = 5;
   // Only some trees keep a low limb, and never more than two: it is the
   // variation that reads, not the feature. Without it every crown starts at
   // the same height off the stem and a stand of them looks issued.
-  const lowWanted = Math.random() < 0.65 ? 1 + Math.floor(Math.random() * 2) : 0;
+  const lowWanted = random() < 0.65 ? 1 + Math.floor(random() * 2) : 0;
   let lowGrown = 0;
 
   const grow = (from: THREE.Vector3, dir: THREE.Vector3, length: number, radius: number, depth: number) => {
@@ -439,13 +448,9 @@ function growBroadleaf(): { limbs: Limb[]; tips: Tip[] } {
     const d = dir.clone();
 
     for (let i = 0; i < SEGMENTS; i++) {
-      // Young wood reaches for the light; older, heavier limbs lean out. The
-      // curve is what stops every limb reading as a straight rod. Weighted
-      // firmly upward: at a weak bias the limbs kept the angle they forked at
-      // and the crown flattened into an umbrella instead of filling out.
-      d.lerp(UP, depth === 0 ? 0.03 : 0.26).normalize();
-      d.x += (Math.random() - 0.5) * 0.16;
-      d.z += (Math.random() - 0.5) * 0.16;
+      d.lerp(UP, depth === 0 ? 0.03 : depth <= 2 ? 0.17 : 0.26).normalize();
+      d.x += (random() - 0.5) * 0.16;
+      d.z += (random() - 0.5) * 0.16;
       d.normalize();
       const next = p.clone().addScaledVector(d, segLen);
       limbs.push({
@@ -457,12 +462,12 @@ function growBroadleaf(): { limbs: Limb[]; tips: Tip[] } {
       p = next;
 
       // A limb straight off the trunk, wider-angled and lower than the fork.
-      if (depth === 0 && i >= 1 && lowGrown < lowWanted && Math.random() < 0.55) {
+      if (depth === 0 && i >= 1 && lowGrown < lowWanted && random() < 0.55) {
         lowGrown++;
         grow(
           p.clone(),
-          branchOff(d, 0.72 + Math.random() * 0.3, Math.random() * Math.PI * 2),
-          length * (0.66 + Math.random() * 0.22),
+          branchOff(d, 0.72 + random() * 0.3, random() * Math.PI * 2),
+          length * (0.66 + random() * 0.22),
           radius * 0.5,
           2,
         );
@@ -475,31 +480,35 @@ function growBroadleaf(): { limbs: Limb[]; tips: Tip[] } {
       // that carries nothing until its very tip reads as a bare stick with a
       // pom-pom on the end.
       if (depth >= 1 && i >= (depth === 1 ? 2 : 1)) {
-        tips.push({ at: p.clone(), size: 0.1 + Math.random() * 0.06 });
-        const side = branchOff(d, Math.PI / 2, Math.random() * Math.PI * 2);
+        tips.push({ at: p.clone(), size: 0.1 + random() * 0.06 });
+        const side = branchOff(d, Math.PI / 2, random() * Math.PI * 2);
         tips.push({
-          at: p.clone().addScaledVector(side, 0.08 + Math.random() * 0.11),
-          size: 0.09 + Math.random() * 0.06,
+          at: p.clone().addScaledVector(side, 0.08 + random() * 0.11),
+          size: 0.09 + random() * 0.06,
         });
       }
     }
 
     const endRadius = radius * 0.58;
     if (depth >= MAX_DEPTH || endRadius < 0.011) {
-      tips.push({ at: p, size: 0.13 + Math.random() * 0.08 });
+      tips.push({ at: p, size: 0.13 + random() * 0.08 });
       return;
     }
 
-    const children = depth === 0 ? 3 : Math.random() < 0.45 ? 3 : 2;
+    const children = depth === 0 ? 3 : random() < 0.45 ? 3 : 2;
     for (let k = 0; k < children; k++) {
-      const azimuth = (k / children) * Math.PI * 2 + Math.random() * 0.9;
-      // Narrower forks higher up, so the crown gathers rather than splays.
-      const spread = (depth === 0 ? 0.44 : 0.52 - depth * 0.04) + Math.random() * 0.26;
-      grow(p, branchOff(d, spread, azimuth), length * (0.68 + Math.random() * 0.14), endRadius, depth + 1);
+      const azimuth = (k / children) * Math.PI * 2 + random() * 0.9;
+      const spread = (depth === 0 ? 0.6 : 0.54 - depth * 0.04) + random() * 0.26;
+      grow(p, branchOff(d, spread, azimuth), length * (0.68 + random() * 0.14), endRadius, depth + 1);
     }
   };
 
   grow(new THREE.Vector3(0, 0, 0), UP.clone(), 0.98, 0.086, 0);
+  const trunk = limbs.filter((limb) => limb.r0 > 0.055).slice(0, 4);
+  for (let branch = 0; branch < extraBranches; branch++) {
+    const base = trunk[Math.min(branch + 1, trunk.length - 1)]!;
+    grow(base.b.clone(), branchOff(UP, 1.05, branch * 2.4 + 0.7), 0.88, 0.039, 1);
+  }
   return { limbs, tips };
 }
 
@@ -510,13 +519,13 @@ function growBroadleaf(): { limbs: Limb[]; tips: Tip[] } {
  * mean the profile breaks up, light gets between the tiers, and the trunk is
  * visible through the gaps the way it is on a real spruce.
  */
-function growFir(): { limbs: Limb[]; tips: Tip[] } {
+function growFir(random: () => number): { limbs: Limb[]; tips: Tip[] } {
   const limbs: Limb[] = [];
   const tips: Tip[] = [];
-  const height = 3.2 + Math.random() * 0.7;
+  const height = 3.2 + random() * 0.7;
   // Enough that consecutive tiers overlap: spaced wider than the foliage is
   // deep, the crown breaks into separate clumps with bare leader between them.
-  const whorls = 10 + Math.floor(Math.random() * 3);
+  const whorls = 10 + Math.floor(random() * 3);
   const base = 0.075;
 
   // The leader, tapering the whole way and wandering a little.
@@ -525,8 +534,8 @@ function growFir(): { limbs: Limb[]; tips: Tip[] } {
   const steps = whorls + 2;
   const nodes: THREE.Vector3[] = [leader.clone()];
   for (let i = 0; i < steps; i++) {
-    leaderDir.x += (Math.random() - 0.5) * 0.035;
-    leaderDir.z += (Math.random() - 0.5) * 0.035;
+    leaderDir.x += (random() - 0.5) * 0.035;
+    leaderDir.z += (random() - 0.5) * 0.035;
     leaderDir.normalize();
     const next = leader.clone().addScaledVector(leaderDir, height / steps);
     limbs.push({
@@ -542,7 +551,7 @@ function growFir(): { limbs: Limb[]; tips: Tip[] } {
   // crown closes into a spire rather than ending in a knob.
   for (let i = Math.floor(nodes.length * 0.6); i < nodes.length; i++) {
     const k = (i - nodes.length * 0.6) / Math.max(nodes.length - nodes.length * 0.6, 1);
-    tips.push({ at: nodes[i]!.clone(), size: (0.22 - k * 0.13) * (0.85 + Math.random() * 0.3) });
+    tips.push({ at: nodes[i]!.clone(), size: (0.22 - k * 0.13) * (0.85 + random() * 0.3) });
   }
 
   /** A point anywhere along the leader, interpolated between its nodes. */
@@ -560,12 +569,12 @@ function growFir(): { limbs: Limb[]; tips: Tip[] } {
     // the next node bare, which is where the gaps in the crown came from.
     const t = 0.3 + (w / Math.max(whorls - 1, 1)) * 0.7;
     const node = along(t);
-    const armCount = 6 + Math.floor(Math.random() * 3);
-    const armLen = (0.95 - t * 0.72) * (0.85 + Math.random() * 0.3);
+    const armCount = 6 + Math.floor(random() * 3);
+    const armLen = (0.95 - t * 0.72) * (0.85 + random() * 0.3);
     const droop = -0.12 - (1 - t) * 0.42;
 
     for (let k = 0; k < armCount; k++) {
-      const azimuth = (k / armCount) * Math.PI * 2 + w * 1.1 + Math.random() * 0.5;
+      const azimuth = (k / armCount) * Math.PI * 2 + w * 1.1 + random() * 0.5;
       const dir = new THREE.Vector3(Math.cos(azimuth), 0, Math.sin(azimuth))
         .normalize()
         .addScaledVector(UP, droop)
@@ -585,7 +594,7 @@ function growFir(): { limbs: Limb[]; tips: Tip[] } {
         });
         p = next;
         // Needled the whole way out, not just at the end.
-        tips.push({ at: p.clone(), size: (0.3 - t * 0.1) * (0.85 + Math.random() * 0.3) });
+        tips.push({ at: p.clone(), size: (0.3 - t * 0.1) * (0.85 + random() * 0.3) });
       }
     }
   }
@@ -600,10 +609,10 @@ function growFir(): { limbs: Limb[]; tips: Tip[] } {
  * smooth ball it was the one thing in the planting that still read as a
  * primitive once the trees around it had structure.
  */
-function growBush(): { limbs: Limb[]; tips: Tip[] } {
+function growBush(random: () => number): { limbs: Limb[]; tips: Tip[] } {
   const limbs: Limb[] = [];
   const tips: Tip[] = [];
-  const stems = 4 + Math.floor(Math.random() * 3);
+  const stems = 4 + Math.floor(random() * 3);
 
   const grow = (from: THREE.Vector3, dir: THREE.Vector3, length: number, radius: number, depth: number) => {
     const SEGMENTS = 3;
@@ -612,23 +621,23 @@ function growBush(): { limbs: Limb[]; tips: Tip[] } {
     const d = dir.clone();
     for (let i = 0; i < SEGMENTS; i++) {
       d.lerp(UP, 0.2).normalize();
-      d.x += (Math.random() - 0.5) * 0.2;
-      d.z += (Math.random() - 0.5) * 0.2;
+      d.x += (random() - 0.5) * 0.2;
+      d.z += (random() - 0.5) * 0.2;
       d.normalize();
       const next = p.clone().addScaledVector(d, segLen);
       limbs.push({ a: p, b: next, r0: radius * (1 - (i / SEGMENTS) * 0.5), r1: radius * (1 - ((i + 1) / SEGMENTS) * 0.5) });
       p = next;
-      if (depth > 0) tips.push({ at: p.clone(), size: 0.11 + Math.random() * 0.06 });
+      if (depth > 0) tips.push({ at: p.clone(), size: 0.11 + random() * 0.06 });
     }
     if (depth >= 1) {
-      tips.push({ at: p, size: 0.13 + Math.random() * 0.07 });
+      tips.push({ at: p, size: 0.13 + random() * 0.07 });
       return;
     }
-    const children = 2 + Math.floor(Math.random() * 2);
+    const children = 2 + Math.floor(random() * 2);
     for (let k = 0; k < children; k++) {
       grow(
         p,
-        branchOff(d, 0.5 + Math.random() * 0.4, (k / children) * Math.PI * 2 + Math.random()),
+        branchOff(d, 0.5 + random() * 0.4, (k / children) * Math.PI * 2 + random()),
         length * 0.72,
         radius * 0.6,
         depth + 1,
@@ -637,9 +646,9 @@ function growBush(): { limbs: Limb[]; tips: Tip[] } {
   };
 
   for (let k = 0; k < stems; k++) {
-    const azimuth = (k / stems) * Math.PI * 2 + Math.random() * 0.8;
-    const lean = 0.34 + Math.random() * 0.3;
-    grow(new THREE.Vector3(0, 0, 0), branchOff(UP, lean, azimuth), 0.42 + Math.random() * 0.16, 0.028, 0);
+    const azimuth = (k / stems) * Math.PI * 2 + random() * 0.8;
+    const lean = 0.34 + random() * 0.3;
+    grow(new THREE.Vector3(0, 0, 0), branchOff(UP, lean, azimuth), 0.42 + random() * 0.16, 0.028, 0);
   }
   return { limbs, tips };
 }
@@ -658,25 +667,54 @@ function limbGeometry(limbs: Limb[], radial: number): THREE.BufferGeometry {
 }
 
 /** Foliage clustered on the tips, merged into one mesh. */
-function foliageGeometry(tips: Tip[], squash: number): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
+function foliageGeometry(tips: Tip[], squash: number, random: () => number): THREE.BufferGeometry {
+  const positions: number[] = [];
   for (const tip of tips) {
-    // One faceted clump per branch tip preserves the branching silhouette.
-    // Layering two or three coarse icosahedra at every tip made crowns read
-    // as stacks of spikes rather than coherent foliage.
-    for (let i = 0; i < 1; i++) {
-      const g = new THREE.IcosahedronGeometry(tip.size * (0.72 + Math.random() * 0.5), FOLIAGE_DETAIL);
-      // Conifer foliage hangs in flat sprays; a broadleaf clump is round.
-      g.scale(1.15, squash * (0.85 + Math.random() * 0.3), 1.15);
-      g.translate(
-        tip.at.x + (Math.random() - 0.5) * tip.size * 1.1,
-        tip.at.y + (Math.random() - 0.5) * tip.size * 0.9,
-        tip.at.z + (Math.random() - 0.5) * tip.size * 1.1,
-      );
-      parts.push(g);
+    const size = tip.size * (0.72 + random() * 0.5);
+    const height = squash * (0.85 + random() * 0.3);
+    const offsetX = random();
+    const offsetY = random();
+    const offsetZ = random();
+    let seed = Math.floor((offsetX + offsetY * 13 + offsetZ * 137) * 1_000_000);
+    const leafRandom = () => THREE.MathUtils.seededRandom(seed++);
+    const center = tip.at.clone().add(new THREE.Vector3(
+      (offsetX - 0.5) * tip.size * 1.1,
+      (offsetY - 0.5) * tip.size * 0.9,
+      (offsetZ - 0.5) * tip.size * 1.1,
+    ));
+    for (let leaf = 0; leaf < 12; leaf++) {
+      const angle = leaf * 2.399963 + offsetX * Math.PI * 2;
+      const reach = size * Math.sqrt((leaf + 0.5) / 12);
+      const origin = center.clone().add(new THREE.Vector3(
+        Math.cos(angle) * reach,
+        (leafRandom() - 0.5) * size * height * 1.6,
+        Math.sin(angle) * reach,
+      ));
+      const length = size * (0.9 + leafRandom() * 0.55);
+      const width = length * (squash < 0.6 ? 0.22 : 0.42);
+      const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+        (leafRandom() - 0.5) * 1.8,
+        angle,
+        (leafRandom() - 0.5) * 1.2,
+      ));
+      const outline = [
+        new THREE.Vector3(-length * 0.5, 0, 0),
+        new THREE.Vector3(-length * 0.18, 0, width * 0.5),
+        new THREE.Vector3(length * 0.22, 0, width * 0.4),
+        new THREE.Vector3(length * 0.5, 0, 0),
+        new THREE.Vector3(length * 0.22, 0, -width * 0.4),
+        new THREE.Vector3(-length * 0.18, 0, -width * 0.5),
+      ].map((vertex) => vertex.applyQuaternion(rotation).add(origin));
+      const ridge = new THREE.Vector3(0, width * 0.16, 0).applyQuaternion(rotation).add(origin);
+      for (let edge = 0; edge < outline.length; edge++) {
+        for (const vertex of [ridge, outline[edge]!, outline[(edge + 1) % outline.length]!]) positions.push(...vertex);
+      }
     }
   }
-  return mergeGeometries(parts)!;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 /**
@@ -1159,6 +1197,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.needsUpdate = true;
     host.appendChild(renderer.domElement);
+    let sceneRevealed = false;
 
     const scene = new THREE.Scene();
     const fog = new THREE.Fog(0x0c0d0f, 20, 44);
@@ -1172,6 +1211,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // meeting at the front corner. Held as an orbit about the subject so the
     // pointer tilt can lean it without the framing drifting off.
     const LOOK = new THREE.Vector3(1.6, 2.0, 0.6);
+    const mobileLook = new THREE.Vector3(3.3, 2.0, -0.8);
+    const viewTarget = LOOK.clone();
     const HOME = new THREE.Vector3(11.6, 8.0, 12.8);
     const orbit = HOME.clone().sub(LOOK);
     const ORBIT_R = orbit.length();
@@ -1180,11 +1221,11 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const aimCamera = (yaw: number, pitch: number) => {
       const cp = Math.cos(pitch);
       camera.position.set(
-        LOOK.x + ORBIT_R * cp * Math.sin(yaw),
-        LOOK.y + ORBIT_R * Math.sin(pitch),
-        LOOK.z + ORBIT_R * cp * Math.cos(yaw),
+        viewTarget.x + ORBIT_R * cp * Math.sin(yaw),
+        viewTarget.y + ORBIT_R * Math.sin(pitch),
+        viewTarget.z + ORBIT_R * cp * Math.cos(yaw),
       );
-      camera.lookAt(LOOK);
+      camera.lookAt(viewTarget);
     };
     aimCamera(BASE_YAW, BASE_PITCH);
 
@@ -1209,10 +1250,9 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     key.position.set(8, 15, 18);
     key.target.position.set(4, 1.6, -1);
     key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    key.shadow.radius = 4.5;
-    // Tight around the house: the planting is grounded by contact blobs, so
-    // the map does not have to stretch across the whole plot.
+    const shadowResolution = Math.min(4096, renderer.capabilities.maxTextureSize);
+    key.shadow.mapSize.set(shadowResolution, shadowResolution);
+    key.shadow.radius = 9;
     const sc = key.shadow.camera;
     sc.left = -9;
     sc.right = 9;
@@ -1231,6 +1271,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // Cool counter-light on the shaded faces, so they read as turned away
     // from the sun rather than as holes.
     const fill = new THREE.DirectionalLight(0x9dbce8, pal.fillIntensity);
+    const dayFillColor = fill.color.clone();
+    const nightFillColor = new THREE.Color(0xbfc2c6);
     fill.position.set(-11, 7, -6);
     scene.add(fill);
 
@@ -1257,7 +1299,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // Flat shading is what makes a six-sided cone read as low-poly rather
     // than as a badly tessellated smooth one.
     const foliageMats = pal.foliage.map((c) =>
-      track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.98, metalness: 0, flatShading: true })),
+      track(new THREE.MeshStandardMaterial({ color: c, roughness: 0.98, metalness: 0, flatShading: true, side: THREE.DoubleSide })),
     );
 
     /** Architecture: filled surfaces, shaped by the scene lighting. */
@@ -1930,30 +1972,42 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       sprite: THREE.Sprite;
       texture: THREE.CanvasTexture;
       canvas: HTMLCanvasElement;
+      anchor: THREE.Vector3;
+      leader: THREE.Line;
     }> = [];
     const paintPin = (pin: (typeof scenePins)[number], value: string, light: boolean) => {
       const scale = 2;
-      const font = "600 18px sans-serif";
+      const font = '600 18px "Space Grotesk Variable", sans-serif';
+      const unitFont = '500 12px "Space Grotesk Variable", sans-serif';
+      const [number, unit = ""] = value.split(/\s+/, 2);
       const measure = pin.canvas.getContext("2d")!;
       measure.font = font;
-      const width = Math.ceil(Math.max(42, measure.measureText(value).width + 24));
+      const numberWidth = measure.measureText(number).width;
+      measure.font = unitFont;
+      const unitWidth = unit ? measure.measureText(unit).width + 5 : 0;
+      const width = Math.ceil(Math.max(64, numberWidth + unitWidth + 26));
       const height = 30;
       pin.canvas.width = width * scale;
       pin.canvas.height = height * scale;
       const context = pin.canvas.getContext("2d")!;
       context.scale(scale, scale);
       context.beginPath();
-      context.roundRect(1, 1, width - 2, height - 2, height / 2);
-      context.fillStyle = light ? "rgba(250, 251, 253, 0.92)" : "rgba(25, 30, 37, 0.9)";
+      context.roundRect(1, 1, width - 2, height - 2, 4);
+      context.fillStyle = light ? "rgba(245, 247, 246, 0.88)" : "rgba(32, 36, 38, 0.88)";
       context.fill();
       context.lineWidth = 1;
-      context.strokeStyle = `#${pinStyle[pin.spot].toString(16).padStart(6, "0")}`;
+      context.strokeStyle = light ? "rgba(35, 45, 48, 0.16)" : "rgba(225, 233, 230, 0.2)";
       context.stroke();
+      context.fillStyle = `#${pinStyle[pin.spot].toString(16).padStart(6, "0")}`;
+      context.fillRect(7, 10, 2, 10);
       context.font = font;
-      context.textAlign = "center";
+      context.textAlign = "left";
       context.textBaseline = "middle";
-      context.fillStyle = light ? "#20242a" : "#f4f7fb";
-      context.fillText(value, width / 2, height / 2);
+      context.fillStyle = light ? "#293331" : "#edf3ef";
+      context.fillText(number, 15, height / 2);
+      context.font = unitFont;
+      context.fillStyle = light ? "#626e69" : "#aab8b1";
+      context.fillText(unit, 15 + numberWidth + 5, height / 2 + 2);
       pin.texture.needsUpdate = true;
       pin.sprite.scale.set(width * 0.0105, height * 0.0105, 1);
     };
@@ -1970,7 +2024,14 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       sprite.position.copy(anchor.position);
       sprite.renderOrder = 6;
       house.add(sprite);
-      const pin = { spot: anchor.spot, sprite, texture, canvas };
+      const leaderGeometry = track(new THREE.BufferGeometry().setFromPoints([anchor.position, anchor.position]));
+      const leader = new THREE.Line(leaderGeometry, track(new THREE.LineBasicMaterial({
+        color: 0x7b9bb1, transparent: true, opacity: 0.8, depthTest: false, depthWrite: false,
+      })));
+      leader.renderOrder = 5;
+      leader.visible = false;
+      house.add(leader);
+      const pin = { spot: anchor.spot, sprite, texture, canvas, anchor: anchor.position.clone(), leader };
       scenePins.push(pin);
       paintPin(pin, metricsRef.current.find((metric) => metric.spot === anchor.spot)?.value ?? "--", pal === LIGHT);
     }
@@ -2050,7 +2111,9 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // Kept coarse for the undergrowth, where the facets are the point.
     const lobeGeo = track(new THREE.IcosahedronGeometry(1, 1));
 
-    const leafMat = () => foliageMats[Math.floor(Math.random() * foliageMats.length)]!;
+    let plantSeed = 7321;
+    const plantRandom = () => THREE.MathUtils.seededRandom(plantSeed++);
+    const leafMat = () => foliageMats[Math.floor(plantRandom() * foliageMats.length)]!;
 
     /**
      * `bare` drops the lowest ring and stands the crown on a longer trunk.
@@ -2068,21 +2131,15 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
      * A handful of archetypes cloned around the plot gives the same variety
      * on screen - clones share geometry and material - for a fixed cost.
      */
-    const archetype = (grow: () => { limbs: Limb[]; tips: Tip[] }, radial: number, squash: number) => {
-      const { limbs, tips } = grow();
-      // Deliberately outside the shadow map, cast and receive both.
-      //
-      // The key light's frustum is nine units around the house, tight enough
-      // to keep the building's own shadow crisp. The planting runs from world
-      // x -19 to +14, so a tree casting into that map is casting from outside
-      // it: the depth lookup clamps at the frustum edge and smears the shadow
-      // into a long hard streak across the ground. Widening the frustum to
-      // reach them is the other half of the same trade - a 1024 map stretched
-      // over the whole plot turns the house's shadow to mush. The trees are
-      // grounded by their contact blobs instead, which is what those are for.
+    const archetype = (grow: (random: () => number) => { limbs: Limb[]; tips: Tip[] }, radial: number, squash: number, random = plantRandom) => {
+      const growthSeed = plantSeed;
+      const { limbs, tips } = grow(random);
       const bark = new THREE.Mesh(track(limbGeometry(limbs, radial)), trunkMat);
-      const leaves = new THREE.Mesh(track(foliageGeometry(tips, squash)), leafMat());
+      const leaves = new THREE.Mesh(track(foliageGeometry(tips, squash, random)), foliageMats[Math.floor(random() * foliageMats.length)]!);
+      bark.castShadow = true;
+      leaves.castShadow = true;
       const g = new THREE.Group();
+      g.userData.growthSeed = growthSeed;
       g.add(bark, leaves);
       return g;
     };
@@ -2091,20 +2148,25 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const broadleafStock = Array.from({ length: 4 }, () => archetype(growBroadleaf, 5, 0.92));
     const bushStock = Array.from({ length: 4 }, () => archetype(growBush, 4, 0.86));
 
-    const standTree = (stock: THREE.Group[], x: number, z: number, scale: number, contact: number) => {
-      const t = stock[Math.floor(Math.random() * stock.length)]!.clone();
+    const standTree = (stock: THREE.Group[], x: number, z: number, scale: number, contact: number, extraBranches = false) => {
+      const source = stock[Math.floor(plantRandom() * stock.length)]!;
+      let branchSeed = source.userData.growthSeed as number;
+      const t = extraBranches
+        ? archetype((random) => growBroadleaf(random, 2), 5, 0.92, () => THREE.MathUtils.seededRandom(branchSeed++))
+        : source.clone();
+      if (extraBranches) (t.children[1] as THREE.Mesh).material = (source.children[1] as THREE.Mesh).material;
       t.position.set(x, 0, z);
       t.scale.setScalar(scale);
-      t.rotation.y = Math.random() * Math.PI * 2;
+      t.rotation.y = plantRandom() * Math.PI * 2;
       flora.add(t);
-      addContact(x, z, scale * contact);
+      addContact(x, z, scale * contact * 0.3);
     };
 
     // The generators size their own trunks, so the caller's scale is a nudge
     // rather than the whole height.
     const addFir = (x: number, z: number, scale: number) => standTree(firStock, x, z, scale * 0.8, 0.9);
-    const addBroadleaf = (x: number, z: number, scale: number) =>
-      standTree(broadleafStock, x, z, scale * 1.15, 1.1);
+    const addBroadleaf = (x: number, z: number, scale: number, extraBranches = false) =>
+      standTree(broadleafStock, x, z, scale * 1.15, 1.1, extraBranches);
 
     const addBush = (x: number, z: number, scale: number) =>
       standTree(bushStock, x, z, scale * 1.7, 1.3);
@@ -2119,34 +2181,34 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
       const potGeo = track(new THREE.CylinderGeometry(0.22, 0.16, 0.34, 12));
       potGeo.translate(potX, PLINTH + 0.17, potZ);
-      house.add(solidMesh(potGeo, plinthMat));
+      house.add(solidMesh(potGeo, roofMat));
 
       const rimGeo = track(new THREE.CylinderGeometry(0.245, 0.245, 0.06, 12));
       rimGeo.translate(potX, PLINTH + 0.32, potZ);
-      house.add(solidMesh(rimGeo, plinthMat));
+      house.add(solidMesh(rimGeo, roofMat));
 
       // The same shrub the ground planting uses, sized to the pot. A cluster
       // of loose lobes was the last thing here still built from primitives.
-      const potted = bushStock[Math.floor(Math.random() * bushStock.length)]!.clone();
+      const potted = bushStock[Math.floor(plantRandom() * bushStock.length)]!.clone();
       potted.position.set(potX, PLINTH + 0.32, potZ);
       // Taller than wide, the way a potted shrub is trained.
       potted.scale.set(0.46, 0.62, 0.46);
-      potted.rotation.y = Math.random() * Math.PI * 2;
+      potted.rotation.y = plantRandom() * Math.PI * 2;
       house.add(potted);
     }
 
     // Six specimens frame rather than surround the house. The largest rear
     // tree is deliberately off-centre, with companion shrubs tying each
     // specimen into the ground while the right foreground stays open.
-    addFir(-11.8, -9.8, 1.08);
+    addFir(-9.3, -7.8, 1.08);
     addBroadleaf(-3.8, -10.2, 1.42);
-    addBroadleaf(2.35, -10.0, 1.82);
+    addBroadleaf(2.35, -10.0, 1.82, true);
     addBroadleaf(5.7, -8.9, 1.18);
     addBroadleaf(-13.5, 2.15, 0.96);
     addFir(-7.2, 4.65, 0.78);
 
-    addBush(-12.7, -8.95, 0.26);
-    addBush(-10.85, -10.65, 0.56);
+    addBush(-10.2, -6.95, 0.26);
+    addBush(-8.35, -8.65, 0.56);
     addBush(-5.25, -9.25, 0.58);
     addBush(-2.65, -11.05, 0.27);
     addBush(-2.05, -9.9, 0.62);
@@ -2158,6 +2220,29 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     addBush(-12.4, 3.1, 0.23);
     addBush(-8.15, 4.0, 0.42);
     addBush(-6.4, 5.45, 0.2);
+
+    house.updateMatrixWorld(true);
+    flora.updateMatrixWorld(true);
+    const plantingBounds = new THREE.Box3().setFromObject(flora);
+    const shadowBounds = new THREE.Box3().setFromObject(house).union(plantingBounds);
+    shadowBounds.min.y = 0;
+    const shadowLightPosition = key.position.clone();
+    const fitShadowCamera = () => {
+      shadowLightPosition.copy(key.position);
+      sc.position.copy(key.position);
+      sc.lookAt(key.target.position);
+      sc.updateMatrixWorld(true);
+      const lightBounds = shadowBounds.clone().applyMatrix4(sc.matrixWorldInverse);
+      sc.left = lightBounds.min.x - 2;
+      sc.right = lightBounds.max.x + 2;
+      sc.bottom = lightBounds.min.y - 2;
+      sc.top = lightBounds.max.y + 2;
+      sc.near = Math.max(0.1, -lightBounds.max.z - 2);
+      sc.far = Math.max(sc.near + 1, -lightBounds.min.z + 10);
+      sc.updateProjectionMatrix();
+      renderer.shadowMap.needsUpdate = true;
+    };
+    fitShadowCamera();
 
     // ---------------- clouds ----------------
     const clouds = new THREE.Group();
@@ -2260,20 +2345,22 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       const ends = new Float32Array(verts);
       const sides = new Float32Array(verts);
       const widths = new Float32Array(verts);
+      const beams = new Float32Array(verts);
       const index = new Uint16Array(count * 6);
 
       const drift = Math.tan(RAY_SLANT) * RAY_SPAN;
       for (let i = 0; i < count; i++) {
         // Chosen so that after drifting it arrives over the roof.
-        const x = ROOF_X + (Math.random() - 0.5) * 5.6 - drift * 0.55 - 1.9;
+        const beam = i < 3;
+        const x = beam ? ROOF_X - drift - 2.1 + i * 1.8 : ROOF_X + (Math.random() - 0.5) * 5.6 - drift * 0.55 - 1.9;
         const y = Math.random() * RAY_SPAN;
-        const z = ROOF_Z + (Math.random() - 0.5) * 4.6;
-        const rate = Math.random();
-        const seed = Math.random();
+        const z = beam ? ROOF_Z - 1.5 + i * 0.8 : ROOF_Z + (Math.random() - 0.5) * 4.6;
+        const rate = beam ? 0.2 + i * 0.3 : Math.random();
+        const seed = beam ? 0 : Math.random();
         // Strongly varied: short dashes through to long streaks.
-        const len = 0.5 + Math.pow(Math.random(), 1.7) * 4.5;
+        const len = beam ? 6.5 + i * 0.65 : 0.4 + Math.pow(Math.random(), 1.7) * 2.8;
         // Longer shafts are wider, so they read as beams rather than threads.
-        const width = 0.012 + Math.pow(Math.random(), 1.5) * 0.05 + len * 0.008;
+        const width = beam ? 0.38 + i * 0.12 : 0.012 + Math.pow(Math.random(), 1.5) * 0.05 + len * 0.008;
 
         for (let c = 0; c < 4; c++) {
           const v = i * 4 + c;
@@ -2287,6 +2374,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
           ends[v] = c === 0 || c === 1 ? 0 : 1;
           sides[v] = c === 0 || c === 3 ? -1 : 1;
           widths[v] = width;
+          beams[v] = beam ? 1 : 0;
         }
 
         const b = i * 4;
@@ -2301,6 +2389,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       geo.setAttribute("aEnd", new THREE.BufferAttribute(ends, 1));
       geo.setAttribute("aSide", new THREE.BufferAttribute(sides, 1));
       geo.setAttribute("aWidth", new THREE.BufferAttribute(widths, 1));
+      geo.setAttribute("aBeam", new THREE.BufferAttribute(beams, 1));
       geo.setIndex(new THREE.BufferAttribute(index, 1));
 
       const uniforms = {
@@ -2414,6 +2503,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     let tiltX = 0;
     let tiltY = 0;
     const onPointer = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || host.clientWidth <= 700) return;
       wantX = (e.clientX / window.innerWidth - 0.5) * 2;
       wantY = (e.clientY / window.innerHeight - 0.5) * 2;
     };
@@ -2423,16 +2513,23 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       if (!host.clientWidth || !host.clientHeight) return;
       renderer.setSize(host.clientWidth, host.clientHeight);
       camera.aspect = host.clientWidth / host.clientHeight;
+      const mobile = host.clientWidth <= 700;
+      viewTarget.copy(mobile ? mobileLook : LOOK);
+      camera.zoom = mobile ? 1.35 : 1;
       // Extra canvas depth lets the grid flow behind the dashboard. Increase
       // vertical FOV by the same ratio so the original horizontal framing of
       // the house and tree line remains intact.
       camera.fov =
-        host.clientHeight > BASE_SCENE_HEIGHT
+        mobile
+          ? THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(46) / 2) / camera.aspect))
+          : host.clientHeight > BASE_SCENE_HEIGHT
           ? THREE.MathUtils.radToDeg(
               2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2) * (host.clientHeight / BASE_SCENE_HEIGHT)),
             )
           : BASE_FOV;
       camera.updateProjectionMatrix();
+      if (mobile) wantX = wantY = tiltX = tiltY = 0;
+      aimCamera(BASE_YAW + tiltX * TILT_YAW, BASE_PITCH + tiltY * TILT_PITCH);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(host);
@@ -2499,6 +2596,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         plinthMat.color.copy(new THREE.Color(pal.plinth)).lerp(DARK_NIGHT_PLINTH, nightAmount);
       }
       const nightLightLevel = pal === LIGHT ? 0.32 : 0.48;
+      fill.color.copy(dayFillColor).lerp(nightFillColor, pal === DARK ? nightAmount : 0);
       const nightHemiLevel = pal === LIGHT ? 0.42 : 0.68;
       key.intensity += (pal.keyIntensity * (target.day ? 1 - target.dusk * 0.35 : nightLightLevel) - key.intensity) * 0.025;
       const dayHemiLevel = pal === LIGHT ? 0.82 : pal.hemiIntensity;
@@ -2512,9 +2610,9 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       const windowGlow = pal === LIGHT ? 0.38 : 0.5;
       glassMat.emissiveIntensity += ((1 - target.day) * windowGlow - glassMat.emissiveIntensity) * 0.035;
       bankLedMat.opacity += ((1 - target.day) * 0.72 - bankLedMat.opacity) * 0.05;
-      if (Math.abs(target.dusk - shadowDusk) > 0.05) {
+      if (Math.abs(target.dusk - shadowDusk) > 0.05 || key.position.distanceToSquared(shadowLightPosition) > 0.0025) {
         shadowDusk = target.dusk;
-        renderer.shadowMap.needsUpdate = true;
+        fitShadowCamera();
       }
 
       rays.uniforms.uColor.value.lerp(new THREE.Color("#ffd08a"), 0.03);
@@ -2539,12 +2637,12 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       // A light suggestion of direct sun, not a weather effect. The warmer
       // key light owns golden hour; these thin out before it takes over.
       const rayTarget =
-        target.day * (0.52 + (1 - target.cloud) * 0.48) * (0.11 + solar * 0.2) * (1 - target.dusk * 0.8);
+        target.day * (0.2 + (1 - target.cloud) * 0.8) * (0.07 + solar * 0.12) * (1 - target.dusk * 0.8);
       rays.uniforms.uOpacity.value += (rayTarget - rays.uniforms.uOpacity.value) * 0.03;
       // Fraction of shafts drawn, straight from PV output.
       rays.uniforms.uAmount.value += (Math.min(0.13 + solar * 0.38, 0.48) - rays.uniforms.uAmount.value) * 0.03;
       // Sunnier means the shafts sweep through faster.
-      raySpeed += (0.3 + solar * 1.35 - raySpeed) * 0.04;
+      raySpeed += (0.2 + solar * 0.8 - raySpeed) * 0.04;
 
       rain.uniforms.uOpacity.value += (target.rain * 0.55 - rain.uniforms.uOpacity.value) * 0.03;
 
@@ -2581,7 +2679,34 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       tiltY += (wantY - tiltY) * 0.045;
       aimCamera(BASE_YAW + tiltX * TILT_YAW, BASE_PITCH - tiltY * TILT_PITCH);
 
+      camera.updateMatrixWorld();
+      house.updateMatrixWorld();
+      for (const pin of scenePins) {
+        let pinScale = 0.0105;
+        pin.sprite.position.copy(pin.anchor);
+        pin.leader.visible = host.clientWidth <= 700 && pin.spot !== "roof";
+        if (host.clientWidth <= 700) {
+          const viewPosition = pin.sprite.getWorldPosition(new THREE.Vector3()).applyMatrix4(camera.matrixWorldInverse);
+          const unitsPerPixel = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * -viewPosition.z) / (host.clientHeight * camera.zoom);
+          pinScale = Math.max(pinScale, unitsPerPixel * 22 / 30);
+          const offsets = { roof: [0, 0], home: [-22, 0], battery: [-5, 32], service: [22, -18], output: [24, 14] } as const;
+          const [offsetX, offsetY] = offsets[pin.spot];
+          const projected = pin.sprite.getWorldPosition(new THREE.Vector3()).project(camera);
+          projected.x += offsetX * 2 / host.clientWidth;
+          projected.y -= offsetY * 2 / host.clientHeight;
+          pin.sprite.position.copy(house.worldToLocal(projected.unproject(camera)));
+          const points = pin.leader.geometry.getAttribute("position");
+          points.setXYZ(1, pin.sprite.position.x, pin.sprite.position.y, pin.sprite.position.z);
+          points.needsUpdate = true;
+          pin.leader.geometry.computeBoundingSphere();
+        }
+        pin.sprite.scale.set(pin.canvas.width / 2 * pinScale, pin.canvas.height / 2 * pinScale, 1);
+      }
       renderer.render(scene, camera);
+      if (!sceneRevealed) {
+        sceneRevealed = true;
+        renderer.domElement.dataset.ready = "true";
+      }
     };
 
     const tick = () => {
@@ -2599,6 +2724,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       render(dt);
     };
 
+    resize();
     if (reduced.matches) render(0);
     else tick();
 

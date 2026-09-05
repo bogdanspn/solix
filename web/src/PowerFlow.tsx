@@ -12,15 +12,15 @@ import { IconBattery, IconGrid, IconHome, IconSun } from "./Icons.tsx";
  */
 
 const W = 640;
-const H = 600;
+const H = 480;
 const CX = W / 2;
-const CY = 430;
+const CY = 350;
 
 const HUB_R = 112;
-const NODE_R = 64;
+const NODE_R = 56;
 const ORBIT = 205;
 
-const SUPPLY_Y = CY - 292;
+const SUPPLY_Y = CY - 260;
 const SUPPLY_DX = 92;
 /** Half way between the hub and the supply row, and drawn in closer. */
 const SIDE_Y = (SUPPLY_Y + CY) / 2;
@@ -113,15 +113,17 @@ function Wire({
 
   return (
     <g>
-      <path d={d} stroke="var(--track)" strokeWidth={2} fill="none" strokeLinecap="round" />
+      <path d={d} stroke="var(--track)" strokeWidth={4} fill="none" strokeLinecap="round" />
+      {active && <path d={d} stroke={color} strokeOpacity={0.2} strokeWidth={4} fill="none" strokeLinecap="round" />}
       {active && (
         <path
           d={d}
           stroke={color}
-          strokeWidth={2.5}
+          className="flow-pulse"
+          strokeWidth={4}
           fill="none"
           strokeLinecap="round"
-          strokeDasharray="5 13"
+          strokeDasharray="2 16"
           style={{ animation: `flow ${speed}s linear infinite ${reverse ? "reverse" : "normal"}` }}
         />
       )}
@@ -168,21 +170,21 @@ function Node({
   const { Icon } = node;
 
   return (
-    <g transform={`translate(${x} ${y})`}>
-      <circle r={NODE_R} fill="var(--node-fill)" stroke="var(--hairline)" strokeWidth={1} />
-      {active && <circle r={NODE_R} fill="none" stroke={node.color} strokeWidth={1.5} opacity={0.7} />}
-      <g transform="translate(-9 -32)" style={{ color: active ? node.color : "var(--text-muted)" }}>
-        <Icon size={18} />
+    <g className="flow-node" transform={`translate(${x} ${y})`}>
+      <rect x={-72} y={-NODE_R} width={144} height={NODE_R * 2} rx={8} fill="var(--node-fill)" stroke="var(--hairline-strong)" />
+      {active && <rect x={-72} y={-NODE_R} width={144} height={NODE_R * 2} rx={8} fill={node.color} fillOpacity={0.055} stroke={node.color} strokeOpacity={0.35} />}
+      <g transform="translate(-11 -38)" style={{ color: active ? node.color : "var(--text-muted)" }}>
+        <Icon size={22} />
       </g>
       <text
-        y={3}
+        y={7}
         textAnchor="middle"
         className="flow-value"
         fill={active ? "var(--text-primary)" : "var(--text-muted)"}
       >
         {watts === null ? "—" : formatW(Math.abs(watts))}
       </text>
-      <text y={23} textAnchor="middle" className="flow-sub" fill="var(--text-muted)">
+      <text y={31} textAnchor="middle" className="flow-sub" fill="var(--text-secondary)">
         {sub ?? node.label}
       </text>
     </g>
@@ -295,21 +297,13 @@ export function PowerFlow({ snapshot, ratedKwh }: { snapshot: Snapshot; ratedKwh
               : "Grid flow is not measured.")
         }
       >
-        <defs>
-          <radialGradient id="hub-glow">
-            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.14" />
-            <stop offset="65%" stopColor="var(--accent)" stopOpacity="0.03" />
-            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        <circle cx={CX} cy={CY} r={ORBIT} fill="url(#hub-glow)" />
-
         <AcInterfaces solarW={solarTotal} inputW={fromMains} />
         {links.map((l) => (
           <LinkPath key={l.node} link={l} />
         ))}
 
         <circle cx={CX} cy={CY} r={HUB_R} fill="var(--node-fill)" stroke="var(--hairline)" strokeWidth={1} />
+        <circle cx={CX} cy={CY} r={HUB_R - 32} fill="none" stroke="var(--hairline)" strokeWidth={1} />
         <Ticks soc={soc} />
 
         <g style={{ color: "var(--battery)" }}>
