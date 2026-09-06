@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { lazy, Suspense, useCallback, useState } from "react";
 import { Modal } from "./Modal.tsx";
 import type { EnergyTotals, Snapshot } from "../../server/types.ts";
 import {
@@ -13,6 +13,8 @@ import {
 } from "./Icons.tsx";
 import { netAcOutputW } from "./derive.ts";
 import { formatDuration, formatEnergy, formatW } from "./format.ts";
+
+const ProductScene = lazy(() => import("./ProductScene.tsx"));
 
 function split(w: number): [string, string] {
   const text = formatW(Math.abs(w));
@@ -175,6 +177,9 @@ export function Readings({
       <button className="detail-trigger" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">System details <IconInfo size={16} /></button>
       <Modal open={detailsOpen} title="System details" onClose={closeDetails}>
       <div className="system-details">
+      <Suspense fallback={<div className="product-scene" aria-busy="true" />}>
+        <ProductScene kind="solarbank" soc={snapshot.online && snapshot.staleSeconds <= 20 ? soc : undefined} />
+      </Suspense>
       {/* Frequency and voltage were confirmed live by sampling; temperature and
           health decode plausibly but are unproven, so they are marked. */}
       <h3 className="eyebrow">Electrical &amp; device</h3>

@@ -1,4 +1,7 @@
 import type { PvString } from "../../server/types.ts";
+import { lazy, Suspense } from "react";
+
+const ProductScene = lazy(() => import("./ProductScene.tsx"));
 
 /**
  * Per-MPPT solar inputs, sitting above the solar node in the flow diagram.
@@ -14,6 +17,9 @@ export function Strings({ strings }: { strings: PvString[] }) {
 
   return (
     <div className="strings-panel">
+      <Suspense fallback={<div className="product-scene" aria-busy="true" />}>
+        <ProductScene kind="panels" />
+      </Suspense>
       <h2 className="eyebrow">Solar</h2>
       <div className="strings">
         {strings.map((st) => (

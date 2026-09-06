@@ -2313,6 +2313,12 @@ html { scrollbar-gutter: stable; }
 .detail-trigger:hover { background: var(--glass); border-color: var(--hairline-strong); }
 .detail-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .modal-body .system-details { border: 0; margin: 0; }
+.product-scene { position: relative; width: 100%; height: 240px; margin: 0 0 16px; cursor: grab; touch-action: pan-y; }
+.product-scene:active { cursor: grabbing; }
+.product-scene:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.product-scene canvas { display: block; width: 100%; height: 100%; }
+.product-scene-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-secondary); font-size: 18px; }
+@media (max-width: 700px) { .product-scene { height: 210px; margin-bottom: 12px; } }
 .layout .flow-compact { flex: 1 0 auto; }
 .layout .flow-card .footnote { margin: 12px 0 20px; font-size: 11px; line-height: 1.6; }
 .layout .pv-details, .layout .system-details, .layout .socket-tariff, .layout .history-events { margin: 0; border: 0; }

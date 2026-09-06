@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { PvString } from "../../server/types.ts";
 import { formatW } from "./format.ts";
+import { createSolarbank } from "./SolarbankModel.ts";
 
 /**
  * The page header: a low-poly house with its own weather.
@@ -1767,51 +1768,64 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // right of the window: local z from -2.5 to -1.36 carries nothing, and
     // that wall faces the camera square on. The gable end is free too, but
     // at this angle it is foreshortened to a sliver.
-    const BANK_W = 0.5;
-    const BANK_H = 0.95;
-    const BANK_D = 0.24;
+    const BANK_W = 0.54;
+    const BANK_H = 0.44;
+    const BANK_D = 0.30;
+    const EXPANSION_H = 0.36;
+    const BANK_COLOR = 0x8294a5;
+    const SEAM_H = 0.008;
     const BANK_Z = -1.95;
     const BANK_X = WALL_FACE + BANK_D / 2;
 
-    const bankGeo = track(new THREE.BoxGeometry(BANK_D, BANK_H, BANK_W));
-    bankGeo.translate(BANK_X, PLINTH + BANK_H / 2, BANK_Z);
-    house.add(shell(bankGeo, bankMat));
-    const bankLedMat = track(
-      new THREE.MeshBasicMaterial({ color: 0x55e89a, transparent: true, opacity: 0 }),
-    );
-    const bankLed = new THREE.Mesh(track(new THREE.SphereGeometry(0.035, 10, 8)), bankLedMat);
-    bankLed.position.set(BANK_X + BANK_D / 2 + 0.025, PLINTH + BANK_H * 0.72, BANK_Z);
-    house.add(bankLed);
+    const bank = createSolarbank({ stackable: true, color: BANK_COLOR, edgeColor: 0x566a7d });
+    const casingBounds = new THREE.Box3().setFromObject(bank.body);
+    const casingSize = casingBounds.getSize(new THREE.Vector3());
+    const casingCenter = casingBounds.getCenter(new THREE.Vector3());
+    bank.group.rotation.y = Math.PI / 2;
+    bank.group.scale.set(BANK_W / casingSize.x, BANK_H / casingSize.y, BANK_D / casingSize.z);
+    const bankBaseOffset = -casingBounds.min.y * bank.group.scale.y;
+    bank.group.position.set(BANK_X - casingCenter.z * bank.group.scale.z, PLINTH + bankBaseOffset, BANK_Z);
+    bank.group.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        track(object.geometry);
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) track(material);
+      }
+    });
+    house.add(bank.group);
+    const bankLedMat = bank.light;
+    bankLedMat.opacity = 0;
 
-    // The stack is modular, so the cabinet carries a seam between each pair
-    // of modules. Built to the maximum and shown to the count: the pack
-    // figure arrives with the device info, a moment after the scene is put
-    // together, and rebuilding the whole scene for it would flash.
     const MAX_PACKS = 6;
-    const seamGeoBank = track(new THREE.BoxGeometry(BANK_D + 0.012, 0.022, BANK_W + 0.012));
-    const bankSeams: THREE.Object3D[] = [];
-    for (let i = 0; i < MAX_PACKS - 1; i++) {
-      const m = new THREE.Mesh(seamGeoBank, trimMat);
-      m.visible = false;
-      house.add(m);
-      bankSeams.push(m);
+    const expansionMaterial = track(new THREE.MeshStandardMaterial({ color: BANK_COLOR, roughness: 0.48, metalness: 0.48 }));
+    const seamMaterial = track(new THREE.MeshStandardMaterial({ color: 0x343c43, roughness: 0.8 }));
+    const expansionGeometry = track(new THREE.BoxGeometry(BANK_D, EXPANSION_H - SEAM_H, BANK_W));
+    const seamGeometry = track(new THREE.BoxGeometry(BANK_D - 0.012, SEAM_H, BANK_W - 0.012));
+    const expansions: THREE.Group[] = [];
+    for (let index = 0; index < MAX_PACKS - 1; index++) {
+      const expansion = new THREE.Group();
+      const body = new THREE.Mesh(expansionGeometry, expansionMaterial);
+      body.position.y = (EXPANSION_H - SEAM_H) / 2;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      const seam = new THREE.Mesh(seamGeometry, seamMaterial);
+      seam.position.y = EXPANSION_H - SEAM_H / 2;
+      expansion.add(body, seam);
+      expansion.position.set(BANK_X, PLINTH + index * EXPANSION_H, BANK_Z);
+      expansion.visible = false;
+      house.add(expansion);
+      expansions.push(expansion);
     }
-    const layoutSeams = (count: number) => {
-      const n = Math.max(1, Math.min(count, MAX_PACKS));
-      bankSeams.forEach((m, i) => {
-        m.visible = i < n - 1;
-        if (m.visible) m.position.set(BANK_X, PLINTH + (BANK_H * (i + 1)) / n, BANK_Z);
+    let bankHeight = BANK_H;
+    const layoutBank = (count: number) => {
+      const packCount = Number.isFinite(count) ? Math.max(1, Math.min(Math.floor(count), MAX_PACKS)) : 1;
+      expansions.forEach((expansion, index) => {
+        expansion.visible = index < packCount - 1;
       });
+      const expansionHeight = (packCount - 1) * EXPANSION_H;
+      bank.group.position.y = PLINTH + expansionHeight + bankBaseOffset;
+      bankHeight = BANK_H + expansionHeight;
     };
-    layoutSeams(1);
-
-    // A capping band, so it reads as a cabinet rather than a block. Straddling
-    // the top rather than flush with it: sharing that face exactly is two
-    // coplanar surfaces fighting for the same depth, which is the flicker
-    // that was showing on the lid.
-    const bankCapGeo = track(new THREE.BoxGeometry(BANK_D + 0.03, 0.07, BANK_W + 0.03));
-    bankCapGeo.translate(BANK_X, PLINTH + BANK_H, BANK_Z);
-    house.add(shell(bankCapGeo, trimMat));
+    layoutBank(1);
 
     // Conduit from the foot of the array, out around the fascia and down the
     // wall to the top of the cabinet. Catmull-rom rather than straight
@@ -1824,7 +1838,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const conduit: Array<[number, number, number]> = [
       [1.5, 2.88, BANK_Z],
       [1.6, 2.78, BANK_Z],
-      [1.6, PLINTH + BANK_H + 0.05, BANK_Z],
+      [1.6, PLINTH + 0.08, BANK_Z],
     ];
     const conduits: Array<{ mat: THREE.ShaderMaterial; flow: FlowKey; phase: number }> = [];
 
@@ -2689,7 +2703,14 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
       if (lastPacks !== target.packs) {
         lastPacks = target.packs;
-        layoutSeams(lastPacks);
+        layoutBank(lastPacks);
+        const batteryPin = scenePins.find((pin) => pin.spot === "battery");
+        if (batteryPin) {
+          batteryPin.anchor.y = PLINTH + bankHeight + 0.28;
+          const points = batteryPin.leader.geometry.getAttribute("position");
+          points.setXYZ(0, batteryPin.anchor.x, batteryPin.anchor.y, batteryPin.anchor.z);
+          points.needsUpdate = true;
+        }
       }
 
       // Fixed, grid-aligned: any sway left it sitting askew on the plinth.
@@ -2715,7 +2736,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
           const viewPosition = pin.sprite.getWorldPosition(new THREE.Vector3()).applyMatrix4(camera.matrixWorldInverse);
           const unitsPerPixel = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * -viewPosition.z) / (host.clientHeight * camera.zoom);
           pinScale = Math.max(pinScale, unitsPerPixel * 22 / 30);
-          const offsets = { roof: [0, 0], home: [-22, 0], battery: [-5, 32], service: [22, -18], output: [24, 14] } as const;
+          const offsets = { roof: [0, 0], home: [-22, 0], battery: [-48, 32], service: [22, -18], output: [24, 14] } as const;
           const [offsetX, offsetY] = offsets[pin.spot];
           const projected = pin.sprite.getWorldPosition(new THREE.Vector3()).project(camera);
           projected.x += offsetX * 2 / host.clientWidth;
