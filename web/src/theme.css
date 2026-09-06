@@ -2562,6 +2562,56 @@ html { scrollbar-gutter: stable; }
   padding: 12px 8px 0;
   margin-bottom: 4px;
 }
+.modal-body .strings-panel { padding: 0; }
+.modal-body .strings { column-gap: 24px; }
+.modal-body .string { padding: 11px 0; background: transparent; }
+.pv-array-summary { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0; }
+.pv-array-summary strong { font-size: 14px; }
+.pv-array-summary strong span { font-weight: 400; }
+.pv-array-summary > span { font-size: 10px; color: var(--text-secondary); }
+.panel-configuration { margin: 12px 0 20px; font-size: 11px; color: var(--text-secondary); }
+.panel-configuration summary { cursor: pointer; padding: 5px 0; width: fit-content; }
+.panel-config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.panel-config-fields > label { display: flex; flex-direction: column; gap: 6px; }
+.panel-config-fields input[type="number"] { width: 100%; min-width: 0; border: 1px solid var(--hairline-strong); border-radius: 4px; padding: 6px 8px; background: var(--glass); color: var(--text-primary); font: inherit; }
+.panel-configuration .panel-config-toggle { display: flex; flex-direction: row; align-items: center; gap: 7px; margin-top: 10px; }
+.string-configured { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.string-configured strong { font-size: 12px; font-weight: 550; }
+.string-configured span { font-size: 10px; line-height: 1.5; color: var(--text-secondary); }
+
+.hardware-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 8px 0 24px; }
+.hardware-metrics dt { font-size: 11px; color: var(--text-secondary); margin-bottom: 5px; }
+.hardware-metrics dd { margin: 0; font: 600 22px var(--font-display); color: var(--text-primary); }
+.hardware-metrics small { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+.device-identity h3 { margin: 0 0 5px; font: 600 18px var(--font-display); }
+.device-identity > span { color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.hardware-metrics .hardware-text { font-size: 18px; }
+.expansion-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 0.8fr); align-items: center; gap: 16px; margin: 16px 0 24px; }
+.expansion-summary h3 { font-size: 14px; margin: 0 0 7px; }
+.expansion-summary p, .expansion-summary span { font-size: 11px; line-height: 1.6; color: var(--text-secondary); }
+.expansion-summary p { margin: 0 0 6px; }
+.product-scene.product-scene-small { height: 130px; margin: 0; }
+.technical-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
+.technical-heading h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.technical-heading > span, .technical-heading a { font-size: 11px; color: var(--text-secondary); }
+.technical-heading a { text-underline-offset: 3px; }
+.technical-note { font-size: 11px; line-height: 1.65; color: var(--text-secondary); margin: 14px 0; }
+.hardware-specs { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+.hardware-specs > div { display: flex; flex-direction: column; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+.hardware-specs dt { font-size: 11px; color: var(--text-secondary); }
+.hardware-specs dd { margin: 0; font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+.string-status { margin-top: 10px; font-size: 10px; line-height: 1.5; color: var(--text-secondary); }
+.string-status.is-warning { color: var(--solar); }
+.string-estimate { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; font-size: 11px; }
+.string-estimate label { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px; color: var(--text-secondary); margin-bottom: 4px; }
+.string-estimate input { width: 70px; padding: 5px 6px; border: 1px solid var(--hairline-strong); border-radius: 4px; background: var(--glass); color: var(--text-primary); font: inherit; }
+.string-estimate > span { color: var(--text-muted); font-size: 10px; }
+@media (max-width: 450px) {
+  .hardware-metrics { gap: 10px; }
+  .hardware-metrics dd { font-size: 18px; }
+  .hardware-metrics small { display: block; margin-top: 3px; }
+  .hardware-specs { gap: 0 16px; }
+}
 
 .string {
   background: rgba(255, 255, 255, 0.03);

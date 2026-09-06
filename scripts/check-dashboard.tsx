@@ -9,6 +9,65 @@ import type { WeatherReport } from "../server/weather.ts";
 import { solarInsights } from "../web/src/insights.ts";
 import { Weather } from "../web/src/Weather.tsx";
 import { Insights } from "../web/src/Insights.tsx";
+import { hardwareFor, isPanelConfiguration, isPanelVoltages, pvInputStatus, seriesPanelEstimate } from "../web/src/hardware.ts";
+import { Strings } from "../web/src/Strings.tsx";
+
+assert.equal(hardwareFor("AE103")?.solarW, 5000);
+assert.equal(hardwareFor("A17C1"), null);
+assert.equal(hardwareFor(), null);
+const measuredString = { index: 1, volts: 60, amps: 10, watts: 600, derived: false };
+assert.equal(seriesPanelEstimate(measuredString, 30, true), 2);
+assert.equal(seriesPanelEstimate(measuredString, 30, false), null);
+assert.equal(seriesPanelEstimate({ ...measuredString, derived: true }, 30, true), null);
+assert.equal(seriesPanelEstimate(measuredString, 0, true), null);
+assert.equal(seriesPanelEstimate({ ...measuredString, amps: 0.1 }, 30, true), null);
+assert.equal(seriesPanelEstimate({ ...measuredString, volts: 45 }, 30, true), null);
+assert.equal(seriesPanelEstimate({ ...measuredString, volts: 34.4 }, 10, true), null);
+assert.equal(seriesPanelEstimate({ ...measuredString, volts: NaN }, 30, true), null);
+assert.equal(seriesPanelEstimate(measuredString, Infinity, true), null);
+assert.equal(seriesPanelEstimate({ ...measuredString, watts: 0 }, 30, true), null);
+assert.equal(pvInputStatus(measuredString, "AE103", true), "At or above maximum PV voltage");
+assert.equal(pvInputStatus({ ...measuredString, volts: 30, amps: 37 }, "AE103", true), "Above MPPT current rating");
+assert.equal(pvInputStatus({ ...measuredString, volts: 30 }, "AE103", true), "Within operating range");
+assert.equal(pvInputStatus(measuredString, "AE103", false), "Last reading");
+assert.equal(pvInputStatus({ ...measuredString, volts: 51 }, "AE103", true), "Outside MPPT operating range");
+assert.equal(pvInputStatus({ ...measuredString, volts: 15 }, "AE103", true), "Outside MPPT operating range");
+assert.equal(pvInputStatus({ ...measuredString, volts: 30, amps: 36 }, "AE103", true), "Within operating range");
+assert.equal(pvInputStatus({ ...measuredString, derived: true }, "AE103", true), "Power inferred; voltage/current unavailable");
+assert.equal(pvInputStatus(measuredString, "unknown", true), "Limits not verified for this model");
+assert.equal(isPanelVoltages({ 1: 30 }), true);
+assert.equal(isPanelVoltages({ 1: -30 }), false);
+assert.equal(isPanelVoltages([]), false);
+assert.equal(isPanelVoltages({ 1: null }), false);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 2, panelW: 500, bifacial: true }), true);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 0, panelW: 500, bifacial: true }), false);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 2, panelW: NaN, bifacial: true }), false);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 1.5, panelW: 500, bifacial: true }), false);
+const pvDetails = renderToStaticMarkup(<Strings strings={[measuredString, { ...measuredString, index: 4, derived: true }]} model="AE103" fresh />);
+assert.match(pvDetails, /60 V DC/);
+assert.match(pvDetails, /Series count unknown/);
+assert.match(pvDetails, /Parallel count unknown/);
+assert.doesNotMatch(pvDetails, /PV4 panel Vmp/);
+assert.doesNotMatch(renderToStaticMarkup(<Strings strings={[]} model="unknown" />), /60 V DC|5,000 W/);
+const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+try {
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key: string) => key === "solix-panel-configuration-confirmed-device"
+      ? JSON.stringify({ enabled: true, panelsPerInput: 2, panelW: 500, bifacial: true }) : null,
+  } });
+  const configuredInputs = Array.from({ length: 4 }, (_, index) => ({ ...measuredString, index: index + 1, derived: index === 3 }));
+  const configuredMarkup = renderToStaticMarkup(<Strings strings={configuredInputs} model="AE103" deviceKey="confirmed-device" fresh />);
+  assert.match(configuredMarkup, /8 panels/);
+  assert.match(configuredMarkup, /4\.0 kWp nameplate/);
+  assert.equal((configuredMarkup.match(/2 × 500 W bifacial/g) ?? []).length, 4);
+  assert.match(configuredMarkup, /user-provided, not detected/);
+  assert.match(configuredMarkup, /PV4 power is inferred/);
+  assert.doesNotMatch(configuredMarkup, /Series count unknown|PV1 panel Vmp/);
+  assert.doesNotMatch(renderToStaticMarkup(<Strings strings={configuredInputs} model="AE103" deviceKey="other-device" fresh />), /8 panels|2 × 500 W bifacial/);
+} finally {
+  if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+  else Reflect.deleteProperty(globalThis, "localStorage");
+}
 
 const totals: EnergyTotals = { pvKwh: 4, chargeKwh: 2, dischargeKwh: 1 };
 const plug: PlugReading = {

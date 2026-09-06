@@ -32,6 +32,43 @@ proof of a device outage. No device settings are changed automatically.
 Run `npm run check-dashboard` and `npm run check-history` for the focused checks.
 The history check uses an in-memory database and does not connect to hardware.
 
+### Hardware Ratings and Panel Estimates
+
+The System and PV strings dialogs show model-gated AE103 specifications from
+[Anker's German product page](https://www.anker.com/de/products/ae103), checked
+on 2026-09-06, including its **Technische Details** image: 5,000 W PV input,
+four MPPTs, 16-50 V MPPT range, 60 V maximum PV voltage, 36 A operating input
+per MPPT, 5.024 kWh base capacity, 2,500 W AC charging/rated grid output, and
+3,600 W AC bypass. The advertised array limit is up to 12 panels, not a wiring
+approval for arbitrary panels. These are published hardware ratings, separate
+from live measurements and the device's configured import/export limits.
+
+Panel count is not exposed by the current Modbus map. Optional, per-input
+panel Vmp ratings are stored in this browser, keyed by device serial. Under
+fresh, sufficiently active, in-range readings, operating voltage divided by
+panel Vmp provides a **series-count estimate** with a 15% tolerance. Ambiguous
+matches are withheld. Temperature, shading, curtailment and MPPT behaviour can
+invalidate it. Parallel count cannot be determined from voltage, and current
+depends on irradiance. PV4 has no measured voltage/current, so no count is
+estimated for it. The panel illustration is representative, not a detected array.
+
+Known installations can instead save a user-provided panel count per input,
+panel wattage and bifacial flag under **Panel configuration**. This uniform
+configuration applies to all four inputs and is stored per device serial in
+this browser. It replaces uncertain count estimates, including on PV4, but
+does not establish series/parallel wiring. Two 500 W panels on each of four
+inputs means eight panels and 4.0 kWp declared nameplate capacity. Bifacial
+rear-side gain is not evidence of additional panels or spare connection capacity.
+
+Never use the estimate or current PV output to decide whether extra panels are
+safe to connect. Verify cold-corrected Voc, panel Isc, cable/connector ratings,
+and permitted topology against the installation manual with an installer.
+The published 36 A input rating is not treated as a short-circuit-current limit.
+Maximum expansion count has not been independently verified here. Expansion
+illustrations use the existing capacity-inferred pack count, assuming roughly
+5 kWh per module; mixed-capacity packs invalidate that assumption. Individual
+pack identity, charge and health are not available.
+
 ## Setup
 
 **1. Enable Modbus TCP on the device** (once, in the Anker app):

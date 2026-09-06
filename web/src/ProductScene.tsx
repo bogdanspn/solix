@@ -37,7 +37,31 @@ function solarPanels() {
   return group;
 }
 
-export default function ProductScene({ kind, soc }: { kind: "solarbank" | "panels"; soc?: number }) {
+function expansionBatteries(count: number) {
+  const group = new THREE.Group();
+  const visibleCount = Math.max(1, Math.min(6, Math.floor(count)));
+  const columns = Math.min(3, visibleCount);
+  const rows = Math.ceil(visibleCount / columns);
+  const metal = new THREE.MeshStandardMaterial({ color: 0x8294a5, roughness: 0.48, metalness: 0.48 });
+  const edge = new THREE.MeshStandardMaterial({ color: 0x394653, roughness: 0.7 });
+  const bodyGeometry = new THREE.BoxGeometry(0.64, 0.42, 0.36);
+  const topGeometry = new THREE.BoxGeometry(0.60, 0.015, 0.32);
+  for (let index = 0; index < visibleCount; index++) {
+    const module = new THREE.Group();
+    const body = new THREE.Mesh(bodyGeometry, metal);
+    body.position.y = 0.22;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    const top = new THREE.Mesh(topGeometry, edge);
+    top.position.y = 0.436;
+    module.add(body, top);
+    module.position.set((index % columns - (columns - 1) / 2) * 0.78, 0, (Math.floor(index / columns) - (rows - 1) / 2) * 0.55);
+    group.add(module);
+  }
+  return group;
+}
+
+export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarbank" | "panels" | "expansions"; soc?: number; count?: number }) {
   const host = useRef<HTMLDivElement>(null);
   const charge = useRef(soc);
   charge.current = soc;
@@ -79,7 +103,7 @@ export default function ProductScene({ kind, soc }: { kind: "solarbank" | "panel
     scene.add(fill);
 
     const bank = kind === "solarbank" ? createSolarbank() : null;
-    const model = bank?.group ?? solarPanels();
+    const model = bank?.group ?? (kind === "expansions" ? expansionBatteries(count) : solarPanels());
     scene.add(model);
     const textures: THREE.Texture[] = [];
     let displayCanvas: HTMLCanvasElement | null = null;
@@ -120,7 +144,7 @@ export default function ProductScene({ kind, soc }: { kind: "solarbank" | "panel
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 30);
     camera.position.set(-2.4, 1.8, 4);
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, kind === "solarbank" ? 0.4 : 0.57, 0);
+    controls.target.set(0, kind === "solarbank" ? 0.4 : kind === "expansions" ? 0.22 : 0.57, 0);
     controls.enableZoom = false;
     controls.enablePan = false;
     controls.minPolarAngle = Math.PI / 3;
@@ -133,8 +157,9 @@ export default function ProductScene({ kind, soc }: { kind: "solarbank" | "panel
       const width = element.clientWidth;
       const height = element.clientHeight;
       if (!width || !height) return;
-      const halfHeight = kind === "solarbank" ? 0.63 : 0.8;
-      const halfWidth = Math.max(halfHeight * width / height, kind === "solarbank" ? 0.75 : 1.05);
+      const halfHeight = kind === "solarbank" ? 0.63 : kind === "expansions" ? 0.48 : 0.8;
+      const minWidth = kind === "solarbank" ? 0.75 : kind === "expansions" ? Math.min(3, count) * 0.45 + 0.1 : 1.05;
+      const halfWidth = Math.max(halfHeight * width / height, minWidth);
       camera.left = -halfWidth;
       camera.right = halfWidth;
       camera.top = halfWidth * height / width;
@@ -190,11 +215,11 @@ export default function ProductScene({ kind, soc }: { kind: "solarbank" | "panel
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [kind]);
+  }, [kind, count]);
 
   useEffect(() => refreshDisplay.current?.(), [soc]);
 
-  return <div className="product-scene" ref={host} role="group" tabIndex={0} aria-label={kind === "solarbank" ? "Solarbank 3D model" : "Solar panels 3D model"} title="Rotate model">
-    {unavailable && <span className="product-scene-fallback">{kind === "solarbank" ? "Anker SOLIX" : "Solar panels"}</span>}
+  return <div className={`product-scene${kind === "expansions" ? " product-scene-small" : ""}`} ref={host} role="group" tabIndex={0} aria-label={kind === "solarbank" ? "Solarbank 3D model" : kind === "expansions" ? "Expansion batteries 3D model" : "Solar panels 3D model"} title="Rotate model">
+    {unavailable && <span className="product-scene-fallback">{kind === "solarbank" ? "Anker SOLIX" : kind === "expansions" ? "Expansion batteries" : "Solar panels"}</span>}
   </div>;
 }

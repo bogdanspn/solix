@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useState } from "react";
 import { Modal } from "./Modal.tsx";
-import type { EnergyTotals, Snapshot } from "../../server/types.ts";
+import type { DeviceInfo, EnergyTotals, Snapshot } from "../../server/types.ts";
 import {
   IconBattery,
   IconGrid,
@@ -13,6 +13,7 @@ import {
 } from "./Icons.tsx";
 import { netAcOutputW } from "./derive.ts";
 import { formatDuration, formatEnergy, formatW } from "./format.ts";
+import { hardwareFor } from "./hardware.ts";
 
 const ProductScene = lazy(() => import("./ProductScene.tsx"));
 
@@ -90,12 +91,17 @@ export function Readings({
   snapshot,
   today,
   device,
+  connected = true,
 }: {
   snapshot: Snapshot;
   today: EnergyTotals;
-  device: { ratedKwh: number; packs: number } | null;
+  device: (Pick<DeviceInfo, "ratedKwh" | "packs"> & Partial<DeviceInfo>) | null;
+  connected?: boolean;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const hardware = hardwareFor(device?.model);
+  const expansions = device && Number.isFinite(device.packs) && device.packs >= 1 ? Math.max(0, Math.floor(device.packs) - 1) : null;
+  const fresh = connected && snapshot.online && snapshot.staleSeconds <= 20;
   const closeDetails = useCallback(() => setDetailsOpen(false), []);
   const [solarV, solarU] = split(snapshot.pvW + snapshot.thirdPartyPvW);
   const [homeV, homeU] = split(snapshot.homeW);
@@ -175,14 +181,28 @@ export function Readings({
         <div><span>Discharged today</span><strong>{formatEnergy(today.dischargeKwh)}</strong></div>
       </div>
       <button className="detail-trigger" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">System details <IconInfo size={16} /></button>
-      <Modal open={detailsOpen} title="System details" onClose={closeDetails}>
+      <Modal open={detailsOpen} title="System details" onClose={closeDetails} wide>
       <div className="system-details">
+      <div className="device-identity"><h3>{device?.name || hardware?.name || "Solarbank"}</h3><span>{device?.model || "Model unavailable"}{device?.firmware ? ` / Firmware ${device.firmware}` : ""}</span></div>
       <Suspense fallback={<div className="product-scene" aria-busy="true" />}>
-        <ProductScene kind="solarbank" soc={snapshot.online && snapshot.staleSeconds <= 20 ? soc : undefined} />
+        <ProductScene kind="solarbank" soc={fresh ? soc : undefined} />
       </Suspense>
+      <dl className="hardware-metrics">
+        <div><dt>Reported capacity</dt><dd>{device ? device.ratedKwh.toFixed(1) : "--"} <small>kWh</small></dd></div>
+        <div><dt>Battery chemistry</dt><dd className="hardware-text">{hardware?.chemistry ?? "--"}</dd></div>
+        <div><dt>Enclosure rating</dt><dd className="hardware-text">{hardware?.protection ?? "--"}</dd></div>
+      </dl>
+      <div className="expansion-summary">
+        <div><h3>{expansions === null ? "Expansion count unknown" : `${expansions} expansion ${expansions === 1 ? "battery" : "batteries"}`}</h3>
+          <p>{expansions === null ? "Capacity information unavailable." : "Capacity-based estimate: about 5 kWh per module. Mixed packs can change the count."}</p>
+          <span>Per-pack charge, health and identity unavailable.</span>
+        </div>
+        {expansions !== null && expansions > 0 && <Suspense fallback={<div className="product-scene product-scene-small" aria-busy="true" />}><ProductScene kind="expansions" count={expansions} /></Suspense>}
+      </div>
       {/* Frequency and voltage were confirmed live by sampling; temperature and
           health decode plausibly but are unproven, so they are marked. */}
       <h3 className="eyebrow">Electrical &amp; device</h3>
+      {!fresh && <p className="technical-note">Last known readings. Device offline or stream stale.</p>}
       <div className="cells">
         <Cell icon={<IconWave size={12} />} label="Frequency" value={snapshot.gridHz.toFixed(2)} unit="Hz" />
         <Cell icon={<IconGrid size={12} />} label="Voltage" value={snapshot.acVolts.toFixed(1)} unit="V" />
@@ -200,18 +220,21 @@ export function Readings({
           unit="%"
           inferred
         />
-        <Cell label="Max from grid" value={(snapshot.gridImportLimitW / 1000).toFixed(1)} unit="kW" />
-        <Cell label="Max to grid" value={(snapshot.gridExportLimitW / 1000).toFixed(1)} unit="kW" />
-        <Cell label="Capacity" value={device ? device.ratedKwh.toFixed(1) : "--"} unit="kWh" />
-        {device && device.packs > 0 && (
-          <Cell
-            label="Packs"
-            value={String(device.packs)}
-            unit={device.packs > 1 ? `base +${device.packs - 1}` : "base"}
-            inferred
-          />
-        )}
+        <Cell label="Configured import limit" value={(snapshot.gridImportLimitW / 1000).toFixed(1)} unit="kW" />
+        <Cell label="Configured export limit" value={(snapshot.gridExportLimitW / 1000).toFixed(1)} unit="kW" />
       </div>
+      {hardware && <section className="technical-section">
+        <div className="technical-heading"><h3>Hardware ratings</h3><a href={hardware.source} target="_blank" rel="noreferrer">Anker specifications</a></div>
+        <dl className="hardware-specs">
+          <div><dt>Solar input max</dt><dd>{formatW(hardware.solarW)} / {hardware.mppts} MPPTs</dd></div>
+          <div><dt>Grid-connected output max</dt><dd>{formatW(hardware.gridOutputW)}</dd></div>
+          <div><dt>AC charging max</dt><dd>{formatW(hardware.acChargeW)}</dd></div>
+          <div><dt>AC bypass output max</dt><dd>{formatW(hardware.bypassW)}</dd></div>
+          <div><dt>Main unit nominal capacity</dt><dd>{hardware.baseKwh.toFixed(3)} kWh</dd></div>
+          <div><dt>Operating temperature</dt><dd>-20 to 55 °C</dd></div>
+        </dl>
+        <p className="technical-note">Hardware ratings are not configured limits or permission to export at full power. Grid rules and installation requirements apply. The 3.6 kW figure is AC bypass, not battery-only output. Expansion compatibility and maximum stack size must be checked in the installation manual.</p>
+      </section>}
 
       </div>
       </Modal>

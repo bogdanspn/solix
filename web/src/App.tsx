@@ -309,13 +309,13 @@ export function App() {
           </div>
           <p className="footnote">{footnote(snapshot)}</p>
           <button className="detail-trigger" onClick={() => setStringsOpen(true)} aria-haspopup="dialog">PV strings <span>{formatW(snapshot.pvW)}</span><IconInfo size={16} /></button>
-          <Modal open={stringsOpen} title="PV strings" onClose={closeStrings}>
-            <Strings strings={snapshot.strings} />
+          <Modal open={stringsOpen} title="PV strings" onClose={closeStrings} wide>
+            <Strings key={info?.device.serial ?? "unknown"} strings={snapshot.strings} model={info?.device.model} deviceKey={info?.device.serial} fresh={connected && snapshot.online && snapshot.staleSeconds <= 20} />
           </Modal>
         </section>
 
         <section className="card battery-card">
-          <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} />
+          <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} connected={connected} />
         </section>
 
         <section className="card span-2 smart-meter-card">
