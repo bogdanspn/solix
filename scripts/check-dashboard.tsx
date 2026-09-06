@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as THREE from "three";
+import { createPlug } from "../web/src/PlugModel.ts";
+import { wallGeometry } from "../web/src/wallGeometry.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EnergyTotals, PlugReading, Snapshot } from "../server/types.ts";
 import { TodaySummary } from "../web/src/TodaySummary.tsx";
@@ -9,7 +12,7 @@ import type { WeatherReport } from "../server/weather.ts";
 import { solarInsights } from "../web/src/insights.ts";
 import { Weather } from "../web/src/Weather.tsx";
 import { Insights } from "../web/src/Insights.tsx";
-import { hardwareFor, isPanelConfiguration, isPanelVoltages, pvInputStatus, seriesPanelEstimate } from "../web/src/hardware.ts";
+import { hardwareFor, isPanelConfiguration, isPanelVoltages, panelSetups, pvInputStatus, seriesPanelEstimate } from "../web/src/hardware.ts";
 import { Strings } from "../web/src/Strings.tsx";
 
 assert.equal(hardwareFor("AE103")?.solarW, 5000);
@@ -43,8 +46,31 @@ assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 2, panelW: 50
 assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 0, panelW: 500, bifacial: true }), false);
 assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 2, panelW: NaN, bifacial: true }), false);
 assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 1.5, panelW: 500, bifacial: true }), false);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 3, panelW: 500, bifacial: true }), true);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 4, panelW: 500, bifacial: true }), false);
+assert.equal(isPanelConfiguration({ enabled: true, panelsPerInput: 2, panelW: 501, bifacial: true }), false);
+const mixedConfiguration = {
+  enabled: true, panelsPerInput: 2, panelW: 500, bifacial: true, individual: true,
+  inputs: [
+    { panelsPerInput: 3, panelW: 500, bifacial: true },
+    { panelsPerInput: 2, panelW: 400, bifacial: false },
+    { panelsPerInput: 1, panelW: 450, bifacial: false },
+    { panelsPerInput: 0, panelW: 500, bifacial: false },
+  ],
+};
+assert.equal(isPanelConfiguration(mixedConfiguration), true);
+assert.equal(panelSetups(mixedConfiguration, 4).reduce((total, setup) => total + setup.panelsPerInput * setup.panelW, 0), 2750);
+assert.equal(isPanelConfiguration({ ...mixedConfiguration, inputs: undefined }), false);
+assert.equal(isPanelConfiguration({ ...mixedConfiguration, inputs: mixedConfiguration.inputs.slice(1) }), false);
+assert.equal(isPanelConfiguration({ ...mixedConfiguration, inputs: [...mixedConfiguration.inputs.slice(1), { panelsPerInput: 4, panelW: 500, bifacial: false }] }), false);
 const pvDetails = renderToStaticMarkup(<Strings strings={[measuredString, { ...measuredString, index: 4, derived: true }]} model="AE103" fresh />);
 assert.match(pvDetails, /60 V DC/);
+assert.match(pvDetails, /role="tablist" aria-label="PV details"/);
+assert.equal((pvDetails.match(/role="tab" /g) ?? []).length, 3);
+assert.equal((pvDetails.match(/aria-selected="true"/g) ?? []).length, 1);
+assert.equal((pvDetails.match(/role="tabpanel"/g) ?? []).length, 3);
+assert.match(pvDetails, /role="tabpanel"[^>]*hidden=""/);
+assert.ok(pvDetails.indexOf('class="product-scene"') < pvDetails.indexOf('role="tablist"'));
 assert.match(pvDetails, /Series count unknown/);
 assert.match(pvDetails, /Parallel count unknown/);
 assert.doesNotMatch(pvDetails, /PV4 panel Vmp/);
@@ -53,7 +79,8 @@ const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStor
 try {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
     getItem: (key: string) => key === "solix-panel-configuration-confirmed-device"
-      ? JSON.stringify({ enabled: true, panelsPerInput: 2, panelW: 500, bifacial: true }) : null,
+      ? JSON.stringify({ enabled: true, panelsPerInput: 2, panelW: 500, bifacial: true })
+      : key === "solix-panel-configuration-mixed-device" ? JSON.stringify(mixedConfiguration) : null,
   } });
   const configuredInputs = Array.from({ length: 4 }, (_, index) => ({ ...measuredString, index: index + 1, derived: index === 3 }));
   const configuredMarkup = renderToStaticMarkup(<Strings strings={configuredInputs} model="AE103" deviceKey="confirmed-device" fresh />);
@@ -62,14 +89,56 @@ try {
   assert.equal((configuredMarkup.match(/2 × 500 W bifacial/g) ?? []).length, 4);
   assert.match(configuredMarkup, /user-provided, not detected/);
   assert.match(configuredMarkup, /PV4 power is inferred/);
+  assert.match(configuredMarkup, /<select/);
+  assert.match(configuredMarkup, /<option value="3">3 panels/);
+  assert.doesNotMatch(configuredMarkup, /<option value="4">/);
+  assert.match(configuredMarkup, /max="500"/);
   assert.doesNotMatch(configuredMarkup, /Series count unknown|PV1 panel Vmp/);
   assert.doesNotMatch(renderToStaticMarkup(<Strings strings={configuredInputs} model="AE103" deviceKey="other-device" fresh />), /8 panels|2 × 500 W bifacial/);
+  const mixedMarkup = renderToStaticMarkup(<Strings strings={configuredInputs} model="AE103" deviceKey="mixed-device" fresh />);
+  assert.match(mixedMarkup, /6 panels/);
+  assert.match(mixedMarkup, /2\.8 kWp nameplate/);
+  assert.match(mixedMarkup, /3 × 500 W bifacial/);
+  assert.match(mixedMarkup, /2 × 400 W panels/);
+  assert.match(mixedMarkup, /1 × 450 W panels/);
+  assert.match(mixedMarkup, /Not connected/);
 } finally {
   if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
   else Reflect.deleteProperty(globalThis, "localStorage");
 }
 
 const totals: EnergyTotals = { pvKwh: 4, chargeKwh: 2, dischargeKwh: 1 };
+const plugModel = createPlug();
+plugModel.updateWorldMatrix(true, true);
+const plugBounds = new THREE.Box3().setFromObject(plugModel);
+assert.ok(plugBounds.min.y >= 0);
+assert.ok(plugBounds.max.y > 1.08 && plugBounds.max.y < 1.1);
+assert.equal(plugModel.children.filter((child) => child.name === "Plug pin").length, 2);
+const recessHit = new THREE.Raycaster(new THREE.Vector3(0, 2, 0), new THREE.Vector3(0, -1, 0)).intersectObject(plugModel)[0];
+assert.ok(recessHit && recessHit.point.y < 0.8 && recessHit.point.y > 0.75);
+const plugMaterials = new Set<THREE.Material>();
+plugModel.traverse((object) => {
+  if (!(object instanceof THREE.Mesh)) return;
+  object.geometry.dispose();
+  for (const material of Array.isArray(object.material) ? object.material : [object.material]) plugMaterials.add(material);
+});
+plugMaterials.forEach((material) => material.dispose());
+const apertureGeometry = wallGeometry(5, 2.4, 0.22, [
+  { x: 0, bottom: 0.6, width: 1, height: 0.8 },
+  { x: 1.5, bottom: 0, width: 0.8, height: 1.4 },
+]);
+const apertureMaterial = new THREE.MeshBasicMaterial();
+const apertureWall = new THREE.Mesh(apertureGeometry, apertureMaterial);
+const wallHits = (horizontal: number, vertical: number) => new THREE.Raycaster(
+  new THREE.Vector3(horizontal, vertical, 1), new THREE.Vector3(0, 0, -1),
+).intersectObject(apertureWall).length;
+assert.equal(wallHits(0, 1), 0);
+assert.equal(wallHits(1.5, 0.3), 0);
+assert.ok(wallHits(-2, 1) > 0);
+assert.ok(wallHits(0, 2) > 0);
+assert.ok(wallHits(0, 0.3) > 0);
+apertureGeometry.dispose();
+apertureMaterial.dispose();
 const plug: PlugReading = {
   host: "192.0.2.1", serial: "test", model: "test", firmware: "test", name: "Desk",
   on: true, watts: 100, volts: 230, amps: 0.43, tempC: 30, online: true,

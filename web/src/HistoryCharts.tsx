@@ -302,10 +302,8 @@ export function HistoryCharts() {
 
           {/* Power. Every series is direct-labelled in the legend, which is the
               relief the light-mode contrast warning requires. */}
-          <div className="history-plot-head">
+          <div className="history-plot-head history-power-head">
             <h3 className="eyebrow">Power</h3>
-            <span className="history-resolution">{range === "day" ? "5-minute" : range === "week" ? "Hourly" : "6-hour"} averages</span>
-          </div>
           <div className="legend history-legend" role="group" aria-label="Power series">
             {SERIES.map((s) => (
               <label className="legend-item" key={s.key} data-visible={visible.has(s.key)}>
@@ -327,6 +325,8 @@ export function HistoryCharts() {
                 {s.label}
               </label>
             ))}
+          </div>
+            <span className="history-resolution">{range === "day" ? "5-minute" : range === "week" ? "Hourly" : "6-hour"} averages</span>
           </div>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart accessibilityLayer syncId={chartId} syncMethod="value" data={chartPoints} margin={{ top: 14, right: 10, bottom: 0, left: -4 }}>

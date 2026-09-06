@@ -14,6 +14,7 @@ import {
 import { netAcOutputW } from "./derive.ts";
 import { formatDuration, formatEnergy, formatW } from "./format.ts";
 import { hardwareFor } from "./hardware.ts";
+import { DetailTabs } from "./DetailTabs.tsx";
 
 const ProductScene = lazy(() => import("./ProductScene.tsx"));
 
@@ -199,9 +200,10 @@ export function Readings({
         </div>
         {expansions !== null && expansions > 0 && <Suspense fallback={<div className="product-scene product-scene-small" aria-busy="true" />}><ProductScene kind="expansions" count={expansions} /></Suspense>}
       </div>
+      <DetailTabs label="System details" tabs={["Electrical & device", "Hardware ratings"]}>
+      <div>
       {/* Frequency and voltage were confirmed live by sampling; temperature and
           health decode plausibly but are unproven, so they are marked. */}
-      <h3 className="eyebrow">Electrical &amp; device</h3>
       {!fresh && <p className="technical-note">Last known readings. Device offline or stream stale.</p>}
       <div className="cells">
         <Cell icon={<IconWave size={12} />} label="Frequency" value={snapshot.gridHz.toFixed(2)} unit="Hz" />
@@ -223,7 +225,9 @@ export function Readings({
         <Cell label="Configured import limit" value={(snapshot.gridImportLimitW / 1000).toFixed(1)} unit="kW" />
         <Cell label="Configured export limit" value={(snapshot.gridExportLimitW / 1000).toFixed(1)} unit="kW" />
       </div>
-      {hardware && <section className="technical-section">
+      </div>
+      <div>
+      {hardware ? <section className="technical-section">
         <div className="technical-heading"><h3>Hardware ratings</h3><a href={hardware.source} target="_blank" rel="noreferrer">Anker specifications</a></div>
         <dl className="hardware-specs">
           <div><dt>Solar input max</dt><dd>{formatW(hardware.solarW)} / {hardware.mppts} MPPTs</dd></div>
@@ -234,8 +238,9 @@ export function Readings({
           <div><dt>Operating temperature</dt><dd>-20 to 55 °C</dd></div>
         </dl>
         <p className="technical-note">Hardware ratings are not configured limits or permission to export at full power. Grid rules and installation requirements apply. The 3.6 kW figure is AC bypass, not battery-only output. Expansion compatibility and maximum stack size must be checked in the installation manual.</p>
-      </section>}
-
+      </section> : <p className="technical-note">Hardware ratings are not verified for {device?.model || "this device"}.</p>}
+      </div>
+      </DetailTabs>
       </div>
       </Modal>
     </div>

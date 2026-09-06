@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import type { PlugReading } from "../../server/types.ts";
 import { formatEnergy, formatW } from "./format.ts";
 import { IconDownload, IconInfo, IconPlug, IconRefresh, IconStar } from "./Icons.tsx";
 import { Confirm, Modal } from "./Modal.tsx";
 import { isBoolean, isStringList, usePreference } from "./preferences.ts";
 import { downloadJson, localDate } from "./download.ts";
+
+const ProductScene = lazy(() => import("./ProductScene.tsx"));
 
 /**
  * The sockets are the only measurement of household consumption on a system
@@ -174,6 +176,7 @@ export function Sockets({ plugs, onRenamed }: { plugs: PlugReading[]; onRenamed:
                 )}
                 </div>
                 </div>
+                <Suspense fallback={<div className="product-scene" aria-busy="true" />}><ProductScene kind="plug" /></Suspense>
                 <div className="socket-detail-columns">
                   <div className="socket-energy-detail"><h4>Energy consumption</h4><dl className="socket-energy-totals">
                     <div><dt>Today</dt><dd>{formatEnergy(p.todayKwh)}</dd></div>

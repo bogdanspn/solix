@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { createSolarbank } from "./SolarbankModel.ts";
+import { createPlug } from "./PlugModel.ts";
+
+const BATTERY_COLOR = 0x8294a5;
 
 function solarPanels() {
   const group = new THREE.Group();
@@ -42,7 +45,7 @@ function expansionBatteries(count: number) {
   const visibleCount = Math.max(1, Math.min(6, Math.floor(count)));
   const columns = Math.min(3, visibleCount);
   const rows = Math.ceil(visibleCount / columns);
-  const metal = new THREE.MeshStandardMaterial({ color: 0x8294a5, roughness: 0.48, metalness: 0.48 });
+  const metal = new THREE.MeshStandardMaterial({ color: BATTERY_COLOR, roughness: 0.48, metalness: 0.48 });
   const edge = new THREE.MeshStandardMaterial({ color: 0x394653, roughness: 0.7 });
   const bodyGeometry = new THREE.BoxGeometry(0.64, 0.42, 0.36);
   const topGeometry = new THREE.BoxGeometry(0.60, 0.015, 0.32);
@@ -61,7 +64,7 @@ function expansionBatteries(count: number) {
   return group;
 }
 
-export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarbank" | "panels" | "expansions"; soc?: number; count?: number }) {
+export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarbank" | "panels" | "expansions" | "plug"; soc?: number; count?: number }) {
   const host = useRef<HTMLDivElement>(null);
   const charge = useRef(soc);
   charge.current = soc;
@@ -102,18 +105,18 @@ export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarban
     fill.position.set(3, 2, -2);
     scene.add(fill);
 
-    const bank = kind === "solarbank" ? createSolarbank() : null;
-    const model = bank?.group ?? (kind === "expansions" ? expansionBatteries(count) : solarPanels());
+    const bank = kind === "solarbank" ? createSolarbank({ color: BATTERY_COLOR }) : null;
+    const model = bank?.group ?? (kind === "plug" ? createPlug() : kind === "expansions" ? expansionBatteries(count) : solarPanels());
     scene.add(model);
     const textures: THREE.Texture[] = [];
     let displayCanvas: HTMLCanvasElement | null = null;
     let displayTexture: THREE.CanvasTexture | null = null;
-    if (bank) {
+    if (bank || kind === "plug") {
       const brandCanvas = document.createElement("canvas");
       brandCanvas.width = 512;
       brandCanvas.height = 192;
       const brand = brandCanvas.getContext("2d")!;
-      brand.fillStyle = "#f5f5f2";
+      brand.fillStyle = kind === "plug" ? "#b6b9b6" : "#f5f5f2";
       brand.textAlign = "center";
       brand.font = "500 72px sans-serif";
       brand.fillText("ANKER", 256, 80);
@@ -122,9 +125,11 @@ export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarban
       const brandTexture = new THREE.CanvasTexture(brandCanvas);
       brandTexture.colorSpace = THREE.SRGBColorSpace;
       textures.push(brandTexture);
-      const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.113), new THREE.MeshBasicMaterial({ map: brandTexture, transparent: true, depthWrite: false }));
-      badge.position.set(0, 0.46, 0.216);
+      const badge = new THREE.Mesh(new THREE.PlaneGeometry(kind === "plug" ? 0.38 : 0.3, kind === "plug" ? 0.143 : 0.113), new THREE.MeshBasicMaterial({ map: brandTexture, transparent: true, depthWrite: false }));
+      badge.position.set(0, kind === "plug" ? 0.93 : 0.46, kind === "plug" ? 0.412 : 0.216);
       model.add(badge);
+    }
+    if (bank) {
       displayCanvas = document.createElement("canvas");
       displayCanvas.width = 512;
       displayCanvas.height = 128;
@@ -135,7 +140,7 @@ export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarban
       display.position.set(0, 0.694, 0.223);
       model.add(display);
     }
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.ShadowMaterial({ opacity: 0.13 }));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.ShadowMaterial({ opacity: kind === "plug" ? 0.06 : 0.13 }));
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.014;
     floor.receiveShadow = true;
@@ -145,6 +150,7 @@ export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarban
     camera.position.set(-2.4, 1.8, 4);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, kind === "solarbank" ? 0.4 : kind === "expansions" ? 0.22 : 0.57, 0);
+    if (kind === "plug") camera.position.set(-1.8, 2.1, 4.5);
     controls.enableZoom = false;
     controls.enablePan = false;
     controls.minPolarAngle = Math.PI / 3;
@@ -157,8 +163,8 @@ export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarban
       const width = element.clientWidth;
       const height = element.clientHeight;
       if (!width || !height) return;
-      const halfHeight = kind === "solarbank" ? 0.63 : kind === "expansions" ? 0.48 : 0.8;
-      const minWidth = kind === "solarbank" ? 0.75 : kind === "expansions" ? Math.min(3, count) * 0.45 + 0.1 : 1.05;
+      const halfHeight = kind === "plug" ? 0.75 : kind === "solarbank" ? 0.63 : kind === "expansions" ? 0.48 : 0.8;
+      const minWidth = kind === "plug" ? 0.62 : kind === "solarbank" ? 0.75 : kind === "expansions" ? Math.min(3, count) * 0.45 + 0.1 : 1.05;
       const halfWidth = Math.max(halfHeight * width / height, minWidth);
       camera.left = -halfWidth;
       camera.right = halfWidth;
@@ -219,7 +225,7 @@ export default function ProductScene({ kind, soc, count = 1 }: { kind: "solarban
 
   useEffect(() => refreshDisplay.current?.(), [soc]);
 
-  return <div className={`product-scene${kind === "expansions" ? " product-scene-small" : ""}`} ref={host} role="group" tabIndex={0} aria-label={kind === "solarbank" ? "Solarbank 3D model" : kind === "expansions" ? "Expansion batteries 3D model" : "Solar panels 3D model"} title="Rotate model">
-    {unavailable && <span className="product-scene-fallback">{kind === "solarbank" ? "Anker SOLIX" : kind === "expansions" ? "Expansion batteries" : "Solar panels"}</span>}
+  return <div className={`product-scene${kind === "expansions" ? " product-scene-small" : ""}`} ref={host} role="group" tabIndex={0} aria-label={kind === "plug" ? "Anker SOLIX plug 3D model" : kind === "solarbank" ? "Solarbank 3D model" : kind === "expansions" ? "Expansion batteries 3D model" : "Solar panels 3D model"} title="Rotate model">
+    {unavailable && <span className="product-scene-fallback">{kind === "plug" ? "Anker SOLIX plug" : kind === "solarbank" ? "Anker SOLIX" : kind === "expansions" ? "Expansion batteries" : "Solar panels"}</span>}
   </div>;
 }

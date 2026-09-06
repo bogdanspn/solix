@@ -51,17 +51,37 @@ export function isPanelVoltages(value: unknown): value is Record<string, number>
     && Object.entries(value).every(([key, volts]) => /^[1-4]$/.test(key) && typeof volts === "number" && Number.isFinite(volts) && volts > 0 && volts <= 60);
 }
 
-export interface PanelConfiguration {
-  enabled: boolean;
+export interface PanelSetup {
   panelsPerInput: number;
   panelW: number;
   bifacial: boolean;
 }
 
+export interface PanelConfiguration extends PanelSetup {
+  enabled: boolean;
+  individual?: boolean;
+  inputs?: PanelSetup[];
+}
+
+function isPanelSetup(value: unknown, minimum: number): value is PanelSetup {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const setup = value as PanelSetup;
+  return typeof setup.bifacial === "boolean"
+    && Number.isInteger(setup.panelsPerInput) && setup.panelsPerInput >= minimum && setup.panelsPerInput <= 3
+    && Number.isFinite(setup.panelW) && setup.panelW >= 1 && setup.panelW <= 500;
+}
+
+export function panelSetups(configuration: PanelConfiguration, count: number): PanelSetup[] {
+  return Array.from({ length: count }, (_, index) => configuration.individual
+    ? configuration.inputs![index]!
+    : { panelsPerInput: configuration.panelsPerInput, panelW: configuration.panelW, bifacial: configuration.bifacial });
+}
+
 export function isPanelConfiguration(value: unknown): value is PanelConfiguration {
   if (typeof value !== "object" || value === null) return false;
   const config = value as PanelConfiguration;
-  return typeof config.enabled === "boolean" && typeof config.bifacial === "boolean"
-    && Number.isInteger(config.panelsPerInput) && config.panelsPerInput >= 1 && config.panelsPerInput <= 12
-    && Number.isFinite(config.panelW) && config.panelW >= 1 && config.panelW <= 2000;
+  return typeof config.enabled === "boolean" && isPanelSetup(config, 1)
+    && (config.individual === undefined || typeof config.individual === "boolean")
+    && (config.inputs === undefined ? !config.individual : Array.isArray(config.inputs)
+      && config.inputs.length === 4 && Array.from(config.inputs).every((setup) => isPanelSetup(setup, 0)));
 }

@@ -53,12 +53,24 @@ depends on irradiance. PV4 has no measured voltage/current, so no count is
 estimated for it. The panel illustration is representative, not a detected array.
 
 Known installations can instead save a user-provided panel count per input,
-panel wattage and bifacial flag under **Panel configuration**. This uniform
-configuration applies to all four inputs and is stored per device serial in
+panel wattage and bifacial flag in the **Panel configuration** tab. **All inputs**
+applies one setup to all four MPPTs; **Per input** saves separate counts, wattages
+and bifacial flags, including **Not connected** for unused inputs. Switching
+modes retains both setups. Configuration is stored per device serial in
 this browser. It replaces uncertain count estimates, including on PV4, but
 does not establish series/parallel wiring. Two 500 W panels on each of four
 inputs means eight panels and 4.0 kWp declared nameplate capacity. Bifacial
 rear-side gain is not evidence of additional panels or spare connection capacity.
+
+The configuration editor offers 1, 2 or 3 panels per input and accepts panel
+ratings from 1 to 500 W. These editor bounds do not replace installation checks;
+an array above the listed 5 kW total rating is flagged separately. Invalid or
+blank wattage drafts do not replace the saved rating. Independent MPPT arrays
+can differ, but panel compatibility within each input must still be checked.
+PV details use **Solar**, **Panel configuration** and **Connection limits** tabs;
+System details separate **Electrical & device** from **Hardware ratings**.
+Product previews remain above the keyboard-accessible tabs, which reserve the
+tallest panel's space to avoid shifting the dialog when switching views.
 
 Never use the estimate or current PV output to decide whether extra panels are
 safe to connect. Verify cold-corrected Voc, panel Isc, cable/connector ratings,

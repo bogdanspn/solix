@@ -1,9 +1,30 @@
 import type { PvString } from "../../server/types.ts";
-import { lazy, Suspense } from "react";
-import { hardwareFor, isPanelConfiguration, isPanelVoltages, pvInputStatus, seriesPanelEstimate, type PanelConfiguration } from "./hardware.ts";
+import { lazy, Suspense, useState } from "react";
+import { hardwareFor, isPanelConfiguration, isPanelVoltages, panelSetups, pvInputStatus, seriesPanelEstimate, type PanelConfiguration, type PanelSetup } from "./hardware.ts";
 import { usePreference } from "./preferences.ts";
+import { DetailTabs } from "./DetailTabs.tsx";
 
 const ProductScene = lazy(() => import("./ProductScene.tsx"));
+
+function PanelFields({ label, setup, individual = false, onChange }: { label: string; setup: PanelSetup; individual?: boolean; onChange: (setup: PanelSetup) => void }) {
+  const [draft, setDraft] = useState(String(setup.panelW));
+  const valid = draft.trim() !== "" && Number.isFinite(Number(draft)) && Number(draft) >= 1 && Number(draft) <= 500;
+  return <fieldset className="panel-config-input">
+    <legend>{label}</legend>
+    <div className="panel-config-fields">
+      <label>{individual ? "Panels" : "Panels per input"}<select value={setup.panelsPerInput} onChange={(event) => onChange({ ...setup, panelsPerInput: Number(event.target.value) })}>
+        {(individual ? [0, 1, 2, 3] : [1, 2, 3]).map((count) => <option key={count} value={count}>{count === 0 ? "Not connected" : `${count} ${count === 1 ? "panel" : "panels"}`}</option>)}
+      </select></label>
+      <label>Panel nameplate W<input type="number" min="1" max="500" step="any" disabled={setup.panelsPerInput === 0} value={draft} aria-invalid={!valid} onChange={(event) => {
+        const value = event.target.value;
+        setDraft(value);
+        if (value.trim() !== "" && Number.isFinite(Number(value)) && Number(value) >= 1 && Number(value) <= 500) onChange({ ...setup, panelW: Number(value) });
+      }} onBlur={() => { if (!valid) setDraft(String(setup.panelW)); }} /></label>
+      {!valid && <span className="panel-config-error" role="status">Enter a panel rating from 1 to 500 W. Saved rating: {setup.panelW} W.</span>}
+      <label className="panel-config-toggle"><input type="checkbox" disabled={setup.panelsPerInput === 0} checked={setup.bifacial} onChange={(event) => onChange({ ...setup, bifacial: event.target.checked })} /> Bifacial</label>
+    </div>
+  </fieldset>;
+}
 
 /**
  * Per-MPPT solar inputs, sitting above the solar node in the flow diagram.
@@ -17,6 +38,9 @@ export function Strings({ strings, model, fresh = false, deviceKey = "unknown" }
   const hardware = hardwareFor(model);
   const [panelVoltages, setPanelVoltages] = usePreference<Record<string, number>>(`solix-panel-vmp-${deviceKey}`, {}, isPanelVoltages);
   const [configuration, setConfiguration] = usePreference<PanelConfiguration>(`solix-panel-configuration-${deviceKey}`, { enabled: false, panelsPerInput: 1, panelW: 400, bifacial: false }, isPanelConfiguration);
+  const setups = panelSetups(configuration, hardware?.mppts ?? 0);
+  const panelCount = setups.reduce((total, setup) => total + setup.panelsPerInput, 0);
+  const nameplateW = setups.reduce((total, setup) => total + setup.panelsPerInput * setup.panelW, 0);
   const configured = hardware !== null && configuration.enabled;
   const peak = Math.max(...strings.map((s) => s.watts), 1);
 
@@ -25,35 +49,23 @@ export function Strings({ strings, model, fresh = false, deviceKey = "unknown" }
       <Suspense fallback={<div className="product-scene" aria-busy="true" />}>
         <ProductScene kind="panels" />
       </Suspense>
-      <h2 className="eyebrow">Solar</h2>
       {hardware ? <dl className="hardware-metrics">
         <div><dt>Solar input max</dt><dd>5.0 <small>kW</small></dd></div>
         <div><dt>Independent MPPTs</dt><dd>{hardware.mppts}</dd></div>
         <div><dt>Advertised array</dt><dd>Up to {hardware.advertisedPanels} <small>panels</small></dd></div>
       </dl> : <p className="technical-note">Hardware limits are not verified for {model || "this device"}.</p>}
       {configured && <div className="pv-array-summary">
-        <strong>{configuration.panelsPerInput * hardware.mppts} panels <span>/ {(configuration.panelsPerInput * configuration.panelW * hardware.mppts / 1000).toFixed(1)} kWp nameplate</span></strong>
+        <strong>{panelCount} panels <span>/ {(nameplateW / 1000).toFixed(1)} kWp nameplate</span></strong>
         <span>User-provided configuration</span>
       </div>}
-      {hardware && <details className="panel-configuration">
-        <summary>Panel configuration</summary>
-        <label className="panel-config-toggle"><input type="checkbox" checked={configuration.enabled} onChange={(event) => setConfiguration({ ...configuration, enabled: event.target.checked })} /> Known panels on all {hardware.mppts} PV inputs</label>
-        {configuration.enabled && <div className="panel-config-fields">
-          <label>Panels per input<input type="number" min="1" max="12" step="1" value={configuration.panelsPerInput} onChange={(event) => {
-            const next = { ...configuration, panelsPerInput: event.target.valueAsNumber };
-            if (isPanelConfiguration(next)) setConfiguration(next);
-          }} /></label>
-          <label>Panel nameplate W<input type="number" min="1" max="2000" step="1" value={configuration.panelW} onChange={(event) => {
-            const next = { ...configuration, panelW: event.target.valueAsNumber };
-            if (isPanelConfiguration(next)) setConfiguration(next);
-          }} /></label>
-          <label className="panel-config-toggle"><input type="checkbox" checked={configuration.bifacial} onChange={(event) => setConfiguration({ ...configuration, bifacial: event.target.checked })} /> Bifacial</label>
-        </div>}
-      </details>}
+      {configured && nameplateW > hardware.solarW && <p className="technical-note panel-config-error" role="status">Configured nameplate capacity exceeds the listed {hardware.solarW / 1000} kW total input rating. Verify the permitted array configuration with Anker before connecting.</p>}
+      <DetailTabs label="PV details" tabs={["Solar", "Panel configuration", "Connection limits"]}>
+      <div>
       <div className="technical-heading"><h3>PV inputs</h3><span>{fresh ? "Live" : "Last readings"}</span></div>
       {strings.length === 0 && <p className="technical-note">PV readings unavailable.</p>}
       <div className="strings">
         {strings.map((st) => {
+          const setup = configured ? setups[st.index - 1] : undefined;
           const status = pvInputStatus(st, model, fresh);
           const estimate = status === "Within operating range" ? seriesPanelEstimate(st, panelVoltages[String(st.index)] ?? 0, fresh) : null;
           const warning = status.startsWith("At or above") || status.startsWith("Above") || status.startsWith("Outside");
@@ -63,9 +75,9 @@ export function Strings({ strings, model, fresh = false, deviceKey = "unknown" }
               <span className="string-name">PV{st.index}</span>
               <span className="string-watts">{Math.round(st.watts)} W</span>
             </div>
-            {configured && <div className="string-configured">
-              <strong>{configuration.panelsPerInput} × {configuration.panelW} W{configuration.bifacial ? " bifacial" : " panels"}</strong>
-              <span>{(configuration.panelsPerInput * configuration.panelW / 1000).toFixed(2)} kWp nameplate · user-provided</span>
+            {setup && <div className="string-configured">
+              <strong>{setup.panelsPerInput === 0 ? "Not connected" : `${setup.panelsPerInput} × ${setup.panelW} W${setup.bifacial ? " bifacial" : " panels"}`}</strong>
+              <span>{(setup.panelsPerInput * setup.panelW / 1000).toFixed(2)} kWp nameplate · user-provided</span>
             </div>}
             <div className="string-bar-track" title="Relative to the strongest PV input, not the input's capacity">
               <div
@@ -105,9 +117,26 @@ export function Strings({ strings, model, fresh = false, deviceKey = "unknown" }
         );})}
       </div>
       <p className="technical-note">{configured
-        ? `Panel count and wattage are user-provided, not detected. Series/parallel wiring remains unverified; PV4 power is inferred.${configuration.bifacial ? " Bifacial rear-side gain can raise output above the declared nameplate rating; this does not indicate extra panels." : ""}`
+        ? `Panel count and wattage are user-provided, not detected. Series/parallel wiring remains unverified; PV4 power is inferred.${setups.some((setup) => setup.panelsPerInput > 0 && setup.bifacial) ? " Bifacial rear-side gain can raise output above the declared nameplate rating; this does not indicate extra panels." : ""}`
         : "Panel count is not reported by Modbus. The series estimate compares operating voltage with your panel's rated Vmp (voltage at maximum power), with a 15% tolerance. Temperature, shading and MPPT behaviour can change it; parallel panels do not add voltage. PV4 power is inferred."}</p>
-      {hardware && <section className="technical-section">
+      </div>
+      <div className="panel-configuration">
+        {hardware ? <>
+          <label className="panel-config-toggle"><input type="checkbox" checked={configuration.enabled} onChange={(event) => setConfiguration({ ...configuration, enabled: event.target.checked })} /> Use saved panel configuration</label>
+          {configuration.enabled && <>
+            <fieldset className="panel-config-mode">
+              <legend>Panel setup</legend>
+              <label><input type="radio" name={`panel-mode-${deviceKey}`} checked={!configuration.individual} onChange={() => setConfiguration({ ...configuration, individual: false })} /> All inputs</label>
+              <label><input type="radio" name={`panel-mode-${deviceKey}`} checked={!!configuration.individual} onChange={() => setConfiguration({ ...configuration, individual: true, inputs: configuration.inputs ?? panelSetups(configuration, hardware.mppts) })} /> Per input</label>
+            </fieldset>
+            {configuration.individual ? <div className="panel-config-inputs">{setups.map((setup, index) => <PanelFields key={index} label={`PV${index + 1} / MPPT ${index + 1}`} setup={setup} individual onChange={(next) => setConfiguration({ ...configuration, inputs: setups.map((previous, position) => position === index ? next : previous) })} />)}</div>
+              : <PanelFields key="shared" label={`All ${hardware.mppts} inputs`} setup={configuration} onChange={(next) => setConfiguration({ ...configuration, ...next })} />}
+          </>}
+          <p className="technical-note">User-provided panel ratings. Independent MPPTs may have different arrays; panel compatibility within each input and all connection limits still apply.</p>
+        </> : <p className="technical-note">Panel configuration is not available for {model || "this device"}.</p>}
+      </div>
+      <div>
+      {hardware ? <section className="technical-section">
         <div className="technical-heading"><h3>Connection limits</h3><a href={hardware.source} target="_blank" rel="noreferrer">Anker specifications</a></div>
         <dl className="hardware-specs">
           <div><dt>MPPT operating voltage</dt><dd>{hardware.mpptMinV}-{hardware.mpptMaxV} V</dd></div>
@@ -116,7 +145,9 @@ export function Strings({ strings, model, fresh = false, deviceKey = "unknown" }
           <div><dt>Total solar input max</dt><dd>{hardware.solarW.toLocaleString()} W</dd></div>
         </dl>
         <p className="technical-note">Up to 12 panels is a manufacturer configuration claim, not approval for any 12 panels. Series adds voltage; parallel adds current. Cold-corrected open-circuit voltage (Voc) must stay below 60 V. Check panel Isc, cables, connectors and the installation manual with your installer; 36 A is an operating-input rating, not a verified short-circuit rating. Live output is not spare connection capacity.</p>
-      </section>}
+      </section> : <p className="technical-note">Connection limits are not verified for {model || "this device"}.</p>}
+      </div>
+      </DetailTabs>
     </div>
   );
 }

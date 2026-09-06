@@ -4,6 +4,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import type { PvString } from "../../server/types.ts";
 import { formatW } from "./format.ts";
 import { createSolarbank } from "./SolarbankModel.ts";
+import { wallGeometry } from "./wallGeometry.ts";
 
 /**
  * The page header: a low-poly house with its own weather.
@@ -96,7 +97,7 @@ const DARK: Palette = {
   // Only a little under the roof: as a strong contrast the bands read as
   // gaps in the roof rather than as edges of it.
   trim: 0x455875,
-  frame: 0x8192aa,
+  frame: 0x8e9db3,
   glass: 0x6a91bf,
   bank: 0x2d3541,
   grid: 0x485463,
@@ -122,7 +123,7 @@ const LIGHT: Palette = {
   wall: 0xffffff,
   roof: 0x6d84a8,
   trim: 0x647b9e,
-  frame: 0xeef1f5,
+  frame: 0xc5cfdc,
   glass: 0xa9cbe8,
   bank: 0x8f97a3,
   grid: 0xc2c9d4,
@@ -179,7 +180,7 @@ const DARK_NIGHT_HEMI_GROUND = new THREE.Color(0x111315);
 const DARK_NIGHT_WALL = new THREE.Color(0x687077);
 const DARK_NIGHT_ROOF = new THREE.Color(0x363b41);
 const DARK_NIGHT_TRIM = new THREE.Color(0x363c43);
-const DARK_NIGHT_FRAME = new THREE.Color(0x737a82);
+const DARK_NIGHT_FRAME = new THREE.Color(0x808790);
 const DARK_NIGHT_PLINTH = new THREE.Color(0x3c4249);
 
 const RAY_COUNT = 260;
@@ -1331,7 +1332,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
     const EAVE = 1.72;
     const RISE = 1.45;
-    const BASE = 2.4;
+    const BASE = 3.05;
     const RIDGE = 0.26 + BASE + RISE;
 
     const PLINTH = 0.26;
@@ -1358,9 +1359,14 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     baseGeo.translate((SLAB_X0 + SLAB_X1) / 2, PLINTH / 2, (SLAB_Z0 + SLAB_Z1) / 2);
     house.add(shell(baseGeo, plinthMat));
 
-    const wallGeo = track(new THREE.BoxGeometry(3.0, BASE, 5.0));
-    wallGeo.translate(0, PLINTH + BASE / 2, 0);
-    house.add(shell(wallGeo, wallMat));
+    const addWall = (width: number, height: number, x: number, z: number, rotation: number, holes: Parameters<typeof wallGeometry>[3] = []) => {
+      const wall = shell(track(wallGeometry(width, height, 0.22, holes)), wallMat);
+      wall.position.set(x, PLINTH, z);
+      wall.rotation.y = rotation;
+      house.add(wall);
+    };
+    addWall(5, BASE, -1.5, 0, -Math.PI / 2);
+    addWall(3, BASE, 0, 2.5, 0);
 
     const roofGeo = track(roofPrism(EAVE * 2, RISE, 5.4));
     roofGeo.translate(0, PLINTH + BASE, 0);
@@ -1386,36 +1392,25 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       roofTrim.add(m);
     };
 
-    // Ridge cap. Stops inside the rake board, so its end grain is never
-    // on show.
-    {
-      const geo = track(ridgeCap(EAVE, RISE, ROOF_D + 0.12));
-      geo.translate(0, PLINTH + BASE, 0);
-      const m = new THREE.Mesh(geo, roofMat);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      roofTrim.add(m);
-    }
-
     // Fascia. Hung below the eave and slightly proud, the way a fascia board
     // actually sits. Centred on the eave corner it straddled the arris and
     // read as a band inset into the roof.
     for (const side of [-1, 1]) {
       addTrim(
-        new THREE.BoxGeometry(0.12, 0.14, ROOF_D + 0.24),
-        side * (EAVE + 0.04),
-        PLINTH + BASE - 0.06,
+        new THREE.BoxGeometry(0.06, 0.09, ROOF_D),
+        side * (EAVE - 0.015),
+        PLINTH + BASE - 0.045,
         0,
       );
     }
 
     // Rake boards on both gable ends.
     {
-      const geo = track(rakeChevron(EAVE, RISE));
-      geo.translate(0, PLINTH + BASE, 0);
+      const geo = track(rakeChevron(EAVE, RISE, 0.055, 0, 0.035));
+      geo.translate(0, PLINTH + BASE - 0.037, 0);
       for (const end of [-1, 1]) {
         const m = new THREE.Mesh(geo, roofMat);
-        m.position.z = end * (ROOF_D / 2 + 0.04);
+        m.position.z = end * (ROOF_D / 2 - 0.0175);
         m.castShadow = true;
         m.receiveShadow = true;
         roofTrim.add(m);
@@ -1429,32 +1424,16 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
      * lower than the panels stand off, so the array passes clear over them.
      */
     const addSeams = (eave: number, rise: number, depth: number, baseY: number, centreZ: number) => {
-      const SEAM_GAP = 0.9;
-      const perSlope = Math.floor(depth / SEAM_GAP);
+      const SEAM_GAP = 0.3;
+      const ribCount = Math.floor(depth / SEAM_GAP);
       const len = Math.hypot(eave, rise);
       const cs = eave / len;
-      const sn = rise / len;
-      const geo = track(new THREE.BoxGeometry(len - 0.14, 0.04, 0.04));
-      const mesh = new THREE.InstancedMesh(geo, roofMat, perSlope * 2);
-      const m = new THREE.Matrix4();
-      const q = new THREE.Quaternion();
-      const pos = new THREE.Vector3();
-      const one = new THREE.Vector3(1, 1, 1);
-      let i = 0;
-      for (const side of [-1, 1]) {
-        // Outward normal of this slope, to lift the rib clear of the surface.
-        const nx = side * sn;
-        const ny = cs;
-        for (let k = 0; k < perSlope; k++) {
-          q.setFromEuler(new THREE.Euler(0, 0, Math.atan2(rise, -side * eave)));
-          pos.set(
-            (side * eave) / 2 + nx * 0.021,
-            baseY + rise / 2 + ny * 0.021,
-            centreZ - depth / 2 + SEAM_GAP * (k + 0.5),
-          );
-          m.compose(pos, q, one);
-          mesh.setMatrixAt(i++, m);
-        }
+      const geo = track(rakeChevron(eave, rise, 0.025, 0, 0.022));
+      const mesh = new THREE.InstancedMesh(geo, roofMat, ribCount);
+      const matrix = new THREE.Matrix4();
+      for (let index = 0; index < ribCount; index++) {
+        matrix.makeTranslation(0, baseY + 0.0125 / cs, centreZ - depth / 2 + depth * (index + 0.5) / ribCount);
+        mesh.setMatrixAt(index, matrix);
       }
       mesh.instanceMatrix.needsUpdate = true;
       mesh.castShadow = true;
@@ -1465,78 +1444,106 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
     addSeams(EAVE, RISE, ROOF_D, PLINTH + BASE, 0);
 
-    // Door and window share a head height, as they would on a real elevation.
     const DOOR_H = 1.35;
-    const WIN_H = 0.66;
-    const HEAD = PLINTH + DOOR_H;
+    const WIN_W = 0.75;
+    const WIN_H = 0.60;
 
-    // Both openings are built the same way: a trim plate set into the wall,
-    // then the leaf or the glass proud of it, so a band of frame shows all
-    // the way round instead of a flat rectangle painted on the render.
     const WALL_FACE = 1.5;
     /** The gable elevation, which faces the camera's right. */
     const GABLE_FACE = -2.5;
     const openings = new THREE.Group();
     house.add(openings);
 
-    const addPlate = (h: number, w: number, y: number, z: number) => {
-      const geo = track(new THREE.BoxGeometry(0.05, h + 0.14, w + 0.14));
-      geo.translate(WALL_FACE + 0.005, y, z);
-      openings.add(shell(geo, frameMat));
-    };
-
     const DOOR_Z = 0.95;
-    const WIN_Z = -0.55;
-    const WIN_Y = HEAD - WIN_H / 2;
-
-    addPlate(DOOR_H, 0.72, PLINTH + DOOR_H / 2, DOOR_Z);
-    const doorGeo = track(new THREE.BoxGeometry(0.06, DOOR_H, 0.72));
-    doorGeo.translate(WALL_FACE + 0.02, PLINTH + DOOR_H / 2, DOOR_Z);
-    openings.add(shell(doorGeo, doorMat));
-
-    // Handle, on the leading edge at the height a handle actually sits.
-    const handleGeo = track(new THREE.BoxGeometry(0.05, 0.055, 0.055));
-    handleGeo.translate(WALL_FACE + 0.06, PLINTH + DOOR_H * 0.46, DOOR_Z - 0.26);
-    openings.add(new THREE.Mesh(handleGeo, frameMat));
-
-    const addWindow = (z: number) => {
-      addPlate(WIN_H, 0.82, WIN_Y, z);
-      const geo = track(new THREE.BoxGeometry(0.06, WIN_H, 0.82));
-      geo.translate(WALL_FACE + 0.02, WIN_Y, z);
-      openings.add(shell(geo, glassMat));
-
-      // A mullion and a transom, which is what stops the glass reading as a
-      // dark rectangle at this size.
-      const mullion = track(new THREE.BoxGeometry(0.05, WIN_H, 0.045));
-      mullion.translate(WALL_FACE + 0.045, WIN_Y, z);
-      openings.add(new THREE.Mesh(mullion, frameMat));
-      const transom = track(new THREE.BoxGeometry(0.05, 0.045, 0.82));
-      transom.translate(WALL_FACE + 0.045, WIN_Y, z);
-      openings.add(new THREE.Mesh(transom, frameMat));
+    const WIN_Z = -0.85;
+    const GABLE_WIN_X = 0;
+    const WIN_Y = PLINTH + 1.02;
+    const FRAME = 0.065;
+    const windowBottom = WIN_Y - PLINTH - WIN_H / 2 - FRAME;
+    const upperWindowY = PLINTH + 2.23;
+    const upperWindowBottom = upperWindowY - PLINTH - WIN_H / 2 - FRAME;
+    addWall(5, BASE, WALL_FACE, 0, Math.PI / 2, [
+      { x: -DOOR_Z, bottom: 0, width: 0.72 + FRAME * 2, height: DOOR_H + FRAME },
+      { x: -WIN_Z, bottom: windowBottom, width: WIN_W + FRAME * 2, height: WIN_H + FRAME * 2 },
+      { x: -DOOR_Z, bottom: upperWindowBottom, width: WIN_W + FRAME * 2, height: WIN_H + FRAME * 2 },
+      { x: -WIN_Z, bottom: upperWindowBottom, width: WIN_W + FRAME * 2, height: WIN_H + FRAME * 2 },
+    ]);
+    addWall(3, BASE, 0, GABLE_FACE, Math.PI, [
+      { x: -GABLE_WIN_X, bottom: windowBottom, width: WIN_W + FRAME * 2, height: WIN_H + FRAME * 2 },
+      { x: -GABLE_WIN_X, bottom: upperWindowBottom, width: WIN_W + FRAME * 2, height: WIN_H + FRAME * 2 },
+    ]);
+    const windowLights: THREE.PointLight[] = [];
+    const fitOpening = (width: number, height: number, x: number, y: number, z: number, rotation: number, kind: "window" | "door" | "garage") => {
+      const opening = new THREE.Group();
+      opening.position.set(x, y, z);
+      opening.rotation.y = rotation;
+      openings.add(opening);
+      const part = (partWidth: number, partHeight: number, depth: number, offsetX: number, offsetY: number, offsetZ: number, material: THREE.Material) => {
+        const mesh = shell(track(new THREE.BoxGeometry(partWidth, partHeight, depth)), material);
+        mesh.position.set(offsetX, offsetY, offsetZ);
+        opening.add(mesh);
+        return mesh;
+      };
+      for (const side of [-1, 1]) part(FRAME, height, 0.15, side * (width + FRAME) / 2, 0, -0.085, frameMat);
+      part(width + FRAME * 2, FRAME, 0.15, 0, (height + FRAME) / 2, -0.085, frameMat);
+      if (kind === "window") part(width + FRAME * 2, FRAME, 0.19, 0, -(height + FRAME) / 2, -0.075, frameMat);
+      const infill = part(width, height, 0.04, 0, 0, -0.17, kind === "window" ? glassMat : doorMat);
+      if (kind === "window") {
+        infill.castShadow = false;
+        infill.receiveShadow = false;
+        part(0.035, height, 0.055, 0, 0, -0.1275, frameMat);
+        part(width, 0.035, 0.055, 0, 0, -0.1275, frameMat);
+        const light = new THREE.PointLight(0xffcf91, 0, 3.5, 2);
+        light.position.set(0, 0.18, -0.58);
+        light.castShadow = true;
+        light.shadow.mapSize.set(512, 512);
+        light.shadow.camera.near = 0.05;
+        light.shadow.camera.far = 3.5;
+        light.shadow.bias = -0.001;
+        light.shadow.normalBias = 0.015;
+        opening.add(light);
+        windowLights.push(light);
+        track(light.shadow);
+      } else if (kind === "door") {
+        part(0.055, 0.055, 0.065, 0.26, -height * 0.04, -0.1175, frameMat);
+      } else {
+        for (let rib = 1; rib < 5; rib++) part(width, 0.025, 0.018, 0, height * (rib / 5 - 0.5), -0.141, frameMat);
+      }
     };
+    fitOpening(0.72, DOOR_H, WALL_FACE, PLINTH + DOOR_H / 2, DOOR_Z, Math.PI / 2, "door");
+    fitOpening(WIN_W, WIN_H, WALL_FACE, WIN_Y, WIN_Z, Math.PI / 2, "window");
+    fitOpening(WIN_W, WIN_H, GABLE_WIN_X, WIN_Y, GABLE_FACE, Math.PI, "window");
+    fitOpening(WIN_W, WIN_H, WALL_FACE, upperWindowY, DOOR_Z, Math.PI / 2, "window");
+    fitOpening(WIN_W, WIN_H, WALL_FACE, upperWindowY, WIN_Z, Math.PI / 2, "window");
+    fitOpening(WIN_W, WIN_H, GABLE_WIN_X, upperWindowY, GABLE_FACE, Math.PI, "window");
 
-    addWindow(WIN_Z);
-
-    /** The same opening turned onto the gable, where local x runs across. */
-    const addGableWindow = (x: number) => {
-      const plate = track(new THREE.BoxGeometry(0.82 + 0.14, WIN_H + 0.14, 0.05));
-      plate.translate(x, WIN_Y, GABLE_FACE - 0.005);
-      openings.add(shell(plate, frameMat));
-
-      const geo = track(new THREE.BoxGeometry(0.82, WIN_H, 0.06));
-      geo.translate(x, WIN_Y, GABLE_FACE - 0.02);
-      openings.add(shell(geo, glassMat));
-
-      const mullion = track(new THREE.BoxGeometry(0.045, WIN_H, 0.05));
-      mullion.translate(x, WIN_Y, GABLE_FACE - 0.045);
-      openings.add(new THREE.Mesh(mullion, frameMat));
-      const transom = track(new THREE.BoxGeometry(0.82, 0.045, 0.05));
-      transom.translate(x, WIN_Y, GABLE_FACE - 0.045);
-      openings.add(new THREE.Mesh(transom, frameMat));
+    const porchFixture = new THREE.Group();
+    porchFixture.name = "Entrance wall light";
+    porchFixture.position.set(WALL_FACE, PLINTH + 1.22, DOOR_Z + 0.8);
+    house.add(porchFixture);
+    const fixtureMetal = surface(0x333b42, 0.48);
+    fixtureMetal.metalness = 0.45;
+    const fixtureDiffuser = surface(0xe7e1d4, 0.38);
+    fixtureDiffuser.emissive.setHex(0xffce8d);
+    const fixturePart = (geometry: THREE.BufferGeometry, material: THREE.Material, offsetX: number, offsetY: number) => {
+      const mesh = shell(track(geometry), material);
+      mesh.position.set(offsetX, offsetY, 0);
+      mesh.castShadow = false;
+      porchFixture.add(mesh);
+      return mesh;
     };
-
-    // On the gable, clear of the grid panel at x 0.57 to 0.93.
-    addGableWindow(-0.5);
+    fixturePart(new THREE.BoxGeometry(0.08, 0.26, 0.14), fixtureMetal, 0.045, 0);
+    fixturePart(new THREE.BoxGeometry(0.012, 0.21, 0.10), fixtureDiffuser, 0.09, 0);
+    const porchLight = new THREE.PointLight(0xffcf91, 0, 4.5, 2);
+    porchLight.position.set(0.16, -0.045, 0);
+    porchLight.castShadow = true;
+    porchLight.shadow.mapSize.set(512, 512);
+    porchLight.shadow.camera.near = 0.05;
+    porchLight.shadow.camera.far = 4.5;
+    porchLight.shadow.bias = -0.001;
+    porchLight.shadow.normalBias = 0.015;
+    porchFixture.add(porchLight);
+    track(porchLight.shadow);
 
     // ---------------- garage, on the far gable ----------------
     // Local +z is world -x, which is screen left. Flat roofed, which also
@@ -1552,9 +1559,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const GAR_ROOF_D = GAR_ROOF_Z1 - GAR_ROOF_Z0;
     const GAR_ROOF_C = (GAR_ROOF_Z0 + GAR_ROOF_Z1) / 2;
 
-    const garWallGeo = track(new THREE.BoxGeometry(3.0, GAR_H, GAR_D));
-    garWallGeo.translate(0, PLINTH + GAR_H / 2, GAR_Z);
-    house.add(shell(garWallGeo, wallMat));
+    addWall(GAR_D, GAR_H, -1.5, GAR_Z, -Math.PI / 2);
+    addWall(3, GAR_H, 0, 2.5 + GAR_D, 0);
 
     // The deck, and a coping band lipped over its edge.
     const garRoofGeo = track(new THREE.BoxGeometry(GAR_HALF * 2, 0.14, GAR_ROOF_D));
@@ -1565,23 +1571,44 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     garCopeGeo.translate(0, PLINTH + GAR_H + 0.15, GAR_ROOF_C + 0.035);
     house.add(solidMesh(garCopeGeo, roofMat));
 
+    const balcony = new THREE.Group();
+    balcony.name = "Garage balcony railing";
+    house.add(balcony);
+    const railingMat = surface(0xc4c9cc, 0.82);
+    railingMat.metalness = 0.3;
+    const railBase = PLINTH + GAR_H + 0.175;
+    const railHeight = 0.65;
+    const railHalf = GAR_HALF - 0.13;
+    const railStart = GAR_ROOF_Z0 + 0.24;
+    const railEnd = GAR_ROOF_Z1 - 0.13;
+    const railPart = (width: number, height: number, depth: number, x: number, y: number, z: number) => {
+      const mesh = shell(track(new THREE.BoxGeometry(width, height, depth)), railingMat);
+      mesh.position.set(x, y, z);
+      balcony.add(mesh);
+    };
+    for (const side of [-1, 1]) {
+      railPart(0.04, 0.04, railEnd - railStart, side * railHalf, railBase + railHeight, (railStart + railEnd) / 2);
+      railPart(0.025, 0.025, railEnd - railStart, side * railHalf, railBase + 0.09, (railStart + railEnd) / 2);
+      const posts = Math.ceil((railEnd - railStart) / 0.28);
+      for (let index = 0; index <= posts; index++) {
+        railPart(0.024, railHeight, 0.024, side * railHalf, railBase + railHeight / 2, railStart + (railEnd - railStart) * index / posts);
+      }
+    }
+    railPart(railHalf * 2, 0.04, 0.04, 0, railBase + railHeight, railEnd);
+    railPart(railHalf * 2, 0.025, 0.025, 0, railBase + 0.09, railEnd);
+    const endPosts = Math.ceil(railHalf * 2 / 0.28);
+    for (let index = 1; index < endPosts; index++) {
+      railPart(0.024, railHeight, 0.024, -railHalf + railHalf * 2 * index / endPosts, railBase + railHeight / 2, railEnd);
+    }
+
     // The door: wide, low, and ribbed, so it is not mistaken for the one on
     // the house.
     const GAR_DOOR_W = 2.1;
     const GAR_DOOR_H = 1.5;
-    const garPlateGeo = track(new THREE.BoxGeometry(0.05, GAR_DOOR_H + 0.16, GAR_DOOR_W + 0.16));
-    garPlateGeo.translate(WALL_FACE + 0.005, PLINTH + GAR_DOOR_H / 2, GAR_Z);
-    house.add(shell(garPlateGeo, frameMat));
-
-    const garDoorGeo = track(new THREE.BoxGeometry(0.06, GAR_DOOR_H, GAR_DOOR_W));
-    garDoorGeo.translate(WALL_FACE + 0.02, PLINTH + GAR_DOOR_H / 2, GAR_Z);
-    house.add(shell(garDoorGeo, doorMat));
-
-    for (let i = 1; i < 5; i++) {
-      const rib = track(new THREE.BoxGeometry(0.05, 0.035, GAR_DOOR_W));
-      rib.translate(WALL_FACE + 0.045, PLINTH + (GAR_DOOR_H * i) / 5, GAR_Z);
-      house.add(new THREE.Mesh(rib, frameMat));
-    }
+    addWall(GAR_D, GAR_H, WALL_FACE, GAR_Z, Math.PI / 2, [
+      { x: 0, bottom: 0, width: GAR_DOOR_W + FRAME * 2, height: GAR_DOOR_H + FRAME },
+    ]);
+    fitOpening(GAR_DOOR_W, GAR_DOOR_H, WALL_FACE, PLINTH + GAR_DOOR_H / 2, GAR_Z, Math.PI / 2, "garage");
 
     // ---------------- solar panels on the slope ----------------    // ---------------- solar panels on the slope ----------------
 
@@ -2635,8 +2662,19 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       const wallLift = pal === LIGHT && target.day ? 0.055 * (1 - target.dusk * 0.3) : 0;
       wallMat.emissiveIntensity += (wallLift - wallMat.emissiveIntensity) * 0.035;
       glassMat.emissive.setHex(pal === LIGHT ? 0xffe2b8 : 0xffc47a);
-      const windowGlow = pal === LIGHT ? 0.38 : 0.5;
+      const windowGlow = pal === LIGHT ? 0.65 : 0.7;
       glassMat.emissiveIntensity += ((1 - target.day) * windowGlow - glassMat.emissiveIntensity) * 0.035;
+      for (const light of windowLights) {
+        light.intensity += (nightAmount * (pal === LIGHT ? 0.85 : 1.1) - light.intensity) * 0.035;
+        const visible = light.intensity > 0.005;
+        if (visible !== light.visible) renderer.shadowMap.needsUpdate = true;
+        light.visible = visible;
+      }
+      fixtureDiffuser.emissiveIntensity += (nightAmount * 1.6 - fixtureDiffuser.emissiveIntensity) * 0.035;
+      porchLight.intensity += (nightAmount * (pal === LIGHT ? 1.5 : 1.8) - porchLight.intensity) * 0.035;
+      const porchVisible = porchLight.intensity > 0.005;
+      if (porchVisible !== porchLight.visible) renderer.shadowMap.needsUpdate = true;
+      porchLight.visible = porchVisible;
       bankLedMat.opacity += ((1 - target.day) * 0.72 - bankLedMat.opacity) * 0.05;
       if (Math.abs(target.dusk - shadowDusk) > 0.05 || key.position.distanceToSquared(shadowLightPosition) > 0.0025) {
         shadowDusk = target.dusk;
