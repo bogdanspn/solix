@@ -208,7 +208,7 @@ const RAY_VERT = /* glsl */ `
   uniform float uAmount;
   uniform float uSlant;
   uniform float uTop;
-  uniform float uSpan;
+  attribute float aSpan;
   attribute float aRate;
   attribute float aLen;
   attribute float aSeed;
@@ -231,12 +231,11 @@ const RAY_VERT = /* glsl */ `
       return;
     }
 
-    float fall = mod(uTop - position.y + uPhase * (2.0 + aRate * 3.0), uSpan);
-    fall = mix(fall, uSpan - 0.3 - aRate * 0.6, aBeam);
+    float fall = mod(uTop - position.y + uPhase * (2.0 + aRate * 3.0), aSpan);
+    fall = mix(fall, aSpan, aBeam);
 
     // Head of the shaft, drifting along the slant as it descends.
     vec3 head = vec3(position.x + fall * uSlant, uTop - fall, position.z);
-    head.x += aBeam * sin(uPhase * 0.18 + aRate * 6.28) * 0.18;
     // Tail trails back up the same line, so the streak lies along its travel.
     vec3 dir = normalize(vec3(uSlant, -1.0, 0.0));
     vec3 p = head - dir * (aEnd * aLen);
@@ -244,7 +243,7 @@ const RAY_VERT = /* glsl */ `
 
     // Faint high up, strongest just before it meets the panels, then cut off
     // at the roofline so nothing passes through the roof.
-    float t = fall / uSpan;
+    float t = fall / aSpan;
     float approach = smoothstep(0.05, 0.88, t);
     float cutoff = smoothstep(1.0, 0.94, t);
     vFade = (0.18 + approach * 0.82) * cutoff;
@@ -276,7 +275,7 @@ const RAY_FRAG = /* glsl */ `
     float body = pow(across, 1.7);
     float core = pow(across, 7.0);
     float lead = 0.75 + vHead * 0.45;
-    float feather = smoothstep(0.0, 0.18, vHead) * (1.0 - smoothstep(0.7, 1.0, vHead));
+    float feather = smoothstep(0.0, 0.18, vHead) * (1.0 - smoothstep(0.98, 1.0, vHead));
     float alpha = mix((body * 0.72 + core * 0.9) * lead * 0.4, pow(across, 2.4) * feather * 1.8, vBeam);
     gl_FragColor = vec4(uColor * (1.0 + core * mix(1.4, 0.15, vBeam)), alpha * vFade * uOpacity);
   }
@@ -448,7 +447,7 @@ function growBroadleaf(random: () => number, extraBranches = 0): { limbs: Limb[]
     const d = dir.clone();
 
     for (let i = 0; i < SEGMENTS; i++) {
-      d.lerp(UP, depth === 0 ? 0.03 : depth <= 2 ? 0.17 : 0.26).normalize();
+      d.lerp(UP, depth === 0 ? 0.03 : depth <= 2 ? 0.045 : 0.1).normalize();
       d.x += (random() - 0.5) * 0.16;
       d.z += (random() - 0.5) * 0.16;
       d.normalize();
@@ -480,34 +479,34 @@ function growBroadleaf(random: () => number, extraBranches = 0): { limbs: Limb[]
       // that carries nothing until its very tip reads as a bare stick with a
       // pom-pom on the end.
       if (depth >= 1 && i >= (depth === 1 ? 2 : 1)) {
-        tips.push({ at: p.clone(), size: 0.1 + random() * 0.06 });
+        tips.push({ at: p.clone(), size: 0.14 + random() * 0.07 });
         const side = branchOff(d, Math.PI / 2, random() * Math.PI * 2);
         tips.push({
           at: p.clone().addScaledVector(side, 0.08 + random() * 0.11),
-          size: 0.09 + random() * 0.06,
+          size: 0.13 + random() * 0.07,
         });
       }
     }
 
     const endRadius = radius * 0.58;
     if (depth >= MAX_DEPTH || endRadius < 0.011) {
-      tips.push({ at: p, size: 0.13 + random() * 0.08 });
+      tips.push({ at: p, size: 0.17 + random() * 0.08 });
       return;
     }
 
     const children = depth === 0 ? 3 : random() < 0.45 ? 3 : 2;
     for (let k = 0; k < children; k++) {
       const azimuth = (k / children) * Math.PI * 2 + random() * 0.9;
-      const spread = (depth === 0 ? 0.6 : 0.54 - depth * 0.04) + random() * 0.26;
+      const spread = (depth === 0 ? 0.95 : 0.7 - depth * 0.04) + random() * 0.26;
       grow(p, branchOff(d, spread, azimuth), length * (0.68 + random() * 0.14), endRadius, depth + 1);
     }
   };
 
-  grow(new THREE.Vector3(0, 0, 0), UP.clone(), 0.98, 0.086, 0);
+  grow(new THREE.Vector3(0, 0, 0), UP.clone(), 0.86, 0.1, 0);
   const trunk = limbs.filter((limb) => limb.r0 > 0.055).slice(0, 4);
   for (let branch = 0; branch < extraBranches; branch++) {
-    const base = trunk[Math.min(branch + 1, trunk.length - 1)]!;
-    grow(base.b.clone(), branchOff(UP, 1.05, branch * 2.4 + 0.7), 0.88, 0.039, 1);
+    const base = trunk[trunk.length - 1]!;
+    grow(base.b.clone(), branchOff(UP, 0.65 + branch * 0.08, branch * 2.4 + 0.7), 0.78 + branch * 0.04, 0.039, 1);
   }
   return { limbs, tips };
 }
@@ -522,10 +521,10 @@ function growBroadleaf(random: () => number, extraBranches = 0): { limbs: Limb[]
 function growFir(random: () => number): { limbs: Limb[]; tips: Tip[] } {
   const limbs: Limb[] = [];
   const tips: Tip[] = [];
-  const height = 3.2 + random() * 0.7;
+  const height = 4.2 + random() * 0.65;
   // Enough that consecutive tiers overlap: spaced wider than the foliage is
   // deep, the crown breaks into separate clumps with bare leader between them.
-  const whorls = 10 + Math.floor(random() * 3);
+  const whorls = 15 + Math.floor(random() * 3);
   const base = 0.075;
 
   // The leader, tapering the whole way and wandering a little.
@@ -567,11 +566,11 @@ function growFir(random: () => number): { limbs: Limb[]; tips: Tip[] } {
     // the very top. Interpolated along the leader rather than snapped to its
     // nodes: rounding to the nearest node put two whorls on one node and left
     // the next node bare, which is where the gaps in the crown came from.
-    const t = 0.3 + (w / Math.max(whorls - 1, 1)) * 0.7;
+    const t = 0.18 + (w / Math.max(whorls - 1, 1)) * 0.8;
     const node = along(t);
     const armCount = 6 + Math.floor(random() * 3);
-    const armLen = (0.95 - t * 0.72) * (0.85 + random() * 0.3);
-    const droop = -0.12 - (1 - t) * 0.42;
+    const armLen = (1.18 * Math.pow(1 - t, 0.8) + 0.035) * (0.85 + random() * 0.3);
+    const droop = 0.12 - (1 - t) * 0.35;
 
     for (let k = 0; k < armCount; k++) {
       const azimuth = (k / armCount) * Math.PI * 2 + w * 1.1 + random() * 0.5;
@@ -594,7 +593,7 @@ function growFir(random: () => number): { limbs: Limb[]; tips: Tip[] } {
         });
         p = next;
         // Needled the whole way out, not just at the end.
-        tips.push({ at: p.clone(), size: (0.3 - t * 0.1) * (0.85 + random() * 0.3) });
+        tips.push({ at: p.clone(), size: (0.34 - t * 0.25) * (0.85 + random() * 0.3) });
       }
     }
   }
@@ -615,12 +614,13 @@ function growBush(random: () => number): { limbs: Limb[]; tips: Tip[] } {
   const stems = 4 + Math.floor(random() * 3);
 
   const grow = (from: THREE.Vector3, dir: THREE.Vector3, length: number, radius: number, depth: number) => {
-    const SEGMENTS = 3;
+    const SEGMENTS = 5;
     const segLen = length / SEGMENTS;
     let p = from.clone();
     const d = dir.clone();
+    const bend = branchOff(dir, 0.65, random() * Math.PI * 2);
     for (let i = 0; i < SEGMENTS; i++) {
-      d.lerp(UP, 0.2).normalize();
+      d.lerp(bend, 0.2).lerp(UP, 0.045).normalize();
       d.x += (random() - 0.5) * 0.2;
       d.z += (random() - 0.5) * 0.2;
       d.normalize();
@@ -648,7 +648,7 @@ function growBush(random: () => number): { limbs: Limb[]; tips: Tip[] } {
   for (let k = 0; k < stems; k++) {
     const azimuth = (k / stems) * Math.PI * 2 + random() * 0.8;
     const lean = 0.34 + random() * 0.3;
-    grow(new THREE.Vector3(0, 0, 0), branchOff(UP, lean, azimuth), 0.42 + random() * 0.16, 0.028, 0);
+    grow(new THREE.Vector3(0, 0, 0), branchOff(UP, lean, azimuth), 0.38 + random() * 0.16, 0.028, 0);
   }
   return { limbs, tips };
 }
@@ -667,7 +667,7 @@ function limbGeometry(limbs: Limb[], radial: number): THREE.BufferGeometry {
 }
 
 /** Foliage clustered on the tips, merged into one mesh. */
-function foliageGeometry(tips: Tip[], squash: number, random: () => number): THREE.BufferGeometry {
+function foliageGeometry(tips: Tip[], squash: number, random: () => number, plantScale = 1): THREE.BufferGeometry {
   const positions: number[] = [];
   for (const tip of tips) {
     const size = tip.size * (0.72 + random() * 0.5);
@@ -682,15 +682,18 @@ function foliageGeometry(tips: Tip[], squash: number, random: () => number): THR
       (offsetY - 0.5) * tip.size * 0.9,
       (offsetZ - 0.5) * tip.size * 1.1,
     ));
-    for (let leaf = 0; leaf < 12; leaf++) {
+    const leafCount = squash < 0.6 ? 12 : Math.ceil(Math.min(96, Math.max(24, 24 * (size * plantScale / 0.22) ** 2)));
+    for (let leaf = 0; leaf < leafCount; leaf++) {
       const angle = leaf * 2.399963 + offsetX * Math.PI * 2;
-      const reach = size * Math.sqrt((leaf + 0.5) / 12);
+      const reach = size * Math.sqrt((leaf + 0.5) / leafCount);
       const origin = center.clone().add(new THREE.Vector3(
         Math.cos(angle) * reach,
         (leafRandom() - 0.5) * size * height * 1.6,
         Math.sin(angle) * reach,
       ));
-      const length = size * (0.9 + leafRandom() * 0.55);
+      const length = squash < 0.6
+        ? size * (0.9 + leafRandom() * 0.55) / plantScale
+        : (0.12 + leafRandom() * 0.04) / plantScale;
       const width = length * (squash < 0.6 ? 0.22 : 0.42);
       const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
         (leafRandom() - 0.5) * 1.8,
@@ -1628,54 +1631,33 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // angle from the top, which is what reads as thickness, and the gap to
     // the roof lets the array drop a shadow onto it.
     const tilt = -Math.asin(sinS);
-    // Gloss on the glass.
-    //
-    // The env map alone cannot do this: every panel shares one normal, so a
-    // reflection is uniform across the whole array and reads as a flat tint.
-    // A highlight parked near one corner gives each panel its own, and
-    // drifting that corner with the view direction - projected onto the
-    // panel's own tangent plane - makes the camera tilt sweep it across the
-    // glass rather than leaving it painted on.
-    // Held outside the compile so the palette can reach it afterwards.
     const glossUniform = { value: pal.gloss };
-    // Shared with every bank's cloned face material, since they all take the
-    // same onBeforeCompile and so close over these same objects.
     const glintUniform = { value: 0 };
     const glintClock = { value: 0 };
+    const glintLife = { value: [0, 0, 0] };
+    const RAY_SLANT = 0.42;
+    const sunDirection = new THREE.Vector3(-Math.tan(RAY_SLANT), 1, 0).normalize();
+    const sunHits = { value: Array.from({ length: 3 }, () => new THREE.Vector3()) };
     panelMat.onBeforeCompile = (shader) => {
       shader.uniforms["uGloss"] = glossUniform;
       shader.uniforms["uGlint"] = glintUniform;
-      shader.uniforms["uGlintTime"] = glintClock;
+      shader.uniforms["uGlintLife"] = glintLife;
+      shader.uniforms["uSunDirection"] = { value: sunDirection };
+      shader.uniforms["uSunHits"] = sunHits;
       shader.vertexShader = shader.vertexShader
         .replace(
           "#include <common>",
           `#include <common>
-          varying vec2 vGlossUv;
-          varying vec2 vGlossOff;
-          varying float vGlintSeed;`,
+          varying vec2 vGlassUv;
+          varying vec3 vGlassWorld;
+          varying vec3 vGlassNormal;`,
         )
         .replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
-          vGlossUv = uv;
-          {
-            vec4 glossWorld = modelMatrix * vec4( position, 1.0 );
-            vec3 glossView = normalize( cameraPosition - glossWorld.xyz );
-            vec3 glossN = normalize( mat3( modelMatrix ) * normal );
-            vec3 glossUp = abs( glossN.y ) > 0.99 ? vec3( 1.0, 0.0, 0.0 ) : vec3( 0.0, 1.0, 0.0 );
-            vec3 glossT = normalize( cross( glossUp, glossN ) );
-            vec3 glossB = cross( glossN, glossT );
-            vGlossOff = vec2( dot( glossView, glossT ), dot( glossView, glossB ) );
-            // Seeded from where the panel stands, so each one keeps its own
-            // rhythm. All eight share a material, so there is no per-object
-            // uniform to key off - but no two share a position.
-            //
-            // The model's translation, NOT the vertex's world position: the
-            // latter differs per vertex, so the seed interpolated across the
-            // face and every fragment ran its own cycle - which came out as
-            // dust scattered over the glass rather than a glint.
-            vGlintSeed = fract( sin( dot( modelMatrix[ 3 ].xz, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
-          }`,
+          vGlassUv = uv;
+          vGlassWorld = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+          vGlassNormal = normalize( mat3( modelMatrix ) * normal );`,
         );
 
       shader.fragmentShader = shader.fragmentShader
@@ -1684,57 +1666,35 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
           `#include <common>
           uniform float uGloss;
           uniform float uGlint;
-          uniform float uGlintTime;
-          varying vec2 vGlossUv;
-          varying vec2 vGlossOff;
-          varying float vGlintSeed;`,
+          uniform float uGlintLife[3];
+          uniform vec3 uSunDirection;
+          uniform vec3 uSunHits[3];
+          varying vec2 vGlassUv;
+          varying vec3 vGlassWorld;
+          varying vec3 vGlassNormal;`,
         )
         .replace(
           "#include <emissivemap_fragment>",
           `#include <emissivemap_fragment>
           {
-            vec2 glossG = vGlossUv - vec2( 0.5 );
-            // Toward the panel's lower right on screen. Sliding the ramp by
-            // the view offset is what makes a tilt sweep the reflection.
-            vec2 glossDir = vec2( -0.7071, 0.7071 );
-            float glossAlong = dot( glossG, glossDir ) + dot( vGlossOff, glossDir ) * 0.2;
-            // A ramp into the corner, not a spot on it. Glass reflects a
-            // whole sky, so it brightens toward the edge it is tilted into;
-            // a dot of light on every panel reads as a decal instead.
-            float glossFall = smoothstep( 0.02, 0.44, glossAlong );
-            // Narrowed across the diagonal, so it stays a corner and does not
-            // become a band down two whole edges.
-            float glossAcross = abs( dot( glossG, vec2( glossDir.y, -glossDir.x ) ) );
-            glossFall *= 1.0 - smoothstep( 0.16, 0.46, glossAcross );
-            totalEmissiveRadiance += vec3( 0.30, 0.40, 0.56 ) * glossFall * uGloss;
-          }
-
-          {
-            // A glint, not a twinkle. Each panel runs its own slow cycle and
-            // most cycles pass without one, so they catch the sun a couple at
-            // a time rather than the whole array shimmering together.
-            float glintCycle = uGlintTime * ( 0.22 + vGlintSeed * 0.16 ) + vGlintSeed * 31.0;
-            float glintSlot = floor( glintCycle );
-            float glintAge = fract( glintCycle );
-            float glintRoll = fract( sin( glintSlot * 45.164 + vGlintSeed * 78.233 ) * 43758.5453 );
-            // Roughly one cycle in three lands anywhere on the glass.
-            float glintOn = step( 0.66, glintRoll );
-            vec2 glintAt = vec2(
-              0.18 + fract( sin( glintSlot * 3.117 + vGlintSeed * 11.7 ) * 4137.13 ) * 0.64,
-              0.18 + fract( sin( glintSlot * 7.713 + vGlintSeed * 5.3 ) * 2917.31 ) * 0.64
-            );
-            // Snaps alight and falls away, the way a reflection passes.
-            float glintLife = smoothstep( 0.0, 0.05, glintAge ) * smoothstep( 0.3, 0.09, glintAge );
-            float glintD = distance( vGlossUv, glintAt );
-            float glintCore = exp( -glintD * glintD * 900.0 );
-            // A faint cross through it, which is what the eye reads as a
-            // catch of light rather than a dot painted on.
-            vec2 glintV = ( vGlossUv - glintAt ) * vec2( 1.0, 1.0 );
-            float glintFlare =
-              exp( -glintV.x * glintV.x * 2600.0 - glintV.y * glintV.y * 90.0 ) +
-              exp( -glintV.y * glintV.y * 2600.0 - glintV.x * glintV.x * 90.0 );
-            float spark = ( glintCore + glintFlare * 0.34 ) * glintLife * glintOn;
-            totalEmissiveRadiance += vec3( 1.0, 0.95, 0.86 ) * spark * uGlint;
+            vec3 glassNormal = normalize( vGlassNormal );
+            vec3 glassView = normalize( cameraPosition - vGlassWorld );
+            vec3 reflectedSun = reflect( -uSunDirection, glassNormal );
+            float facing = max( dot( glassNormal, uSunDirection ), 0.0 );
+            float specularView = pow( max( dot( reflectedSun, glassView ), 0.0 ), 12.0 );
+            float sheenAxis = dot( vGlassUv - vec2(0.5), vec2(0.8, 0.6) ) +
+              dot( glassView, vec3(0.9, 0.0, 0.75) ) - 0.55;
+            float sheen = exp( -sheenAxis * sheenAxis * 9.0 );
+            float broadReflection = pow( max( dot( reflectedSun, glassView ), 0.0 ), 3.0 );
+            totalEmissiveRadiance += vec3(0.35, 0.48, 0.65) * sheen * uGloss *
+              (0.2 + broadReflection * 0.8) * facing * uGlint * 0.65;
+            for ( int hit = 0; hit < 3; hit++ ) {
+              vec3 offset = vGlassWorld - uSunHits[hit];
+              float distanceSq = dot( offset, offset );
+              float core = exp( -distanceSq * 500.0 );
+              totalEmissiveRadiance += vec3( 1.0, 0.95, 0.84 ) *
+                core * 1.6 * (0.08 + specularView) * facing * uGlintLife[hit] * uGlint;
+            }
           }`,
         );
     };
@@ -2140,6 +2100,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       leaves.castShadow = true;
       const g = new THREE.Group();
       g.userData.growthSeed = growthSeed;
+      g.userData.foliageTips = tips;
+      g.userData.foliageSquash = squash;
       g.add(bark, leaves);
       return g;
     };
@@ -2152,8 +2114,16 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       const source = stock[Math.floor(plantRandom() * stock.length)]!;
       let branchSeed = source.userData.growthSeed as number;
       const t = extraBranches
-        ? archetype((random) => growBroadleaf(random, 2), 5, 0.92, () => THREE.MathUtils.seededRandom(branchSeed++))
+        ? archetype((random) => growBroadleaf(random, 3), 5, 0.92, () => THREE.MathUtils.seededRandom(branchSeed++))
         : source.clone();
+      let leafSeed = source.userData.growthSeed as number;
+      const foliageSource = extraBranches ? t : source;
+      (t.children[1] as THREE.Mesh).geometry = track(foliageGeometry(
+        foliageSource.userData.foliageTips as Tip[],
+        foliageSource.userData.foliageSquash as number,
+        () => THREE.MathUtils.seededRandom(leafSeed++),
+        scale,
+      ));
       if (extraBranches) (t.children[1] as THREE.Mesh).material = (source.children[1] as THREE.Mesh).material;
       t.position.set(x, 0, z);
       t.scale.setScalar(scale);
@@ -2164,7 +2134,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
     // The generators size their own trunks, so the caller's scale is a nudge
     // rather than the whole height.
-    const addFir = (x: number, z: number, scale: number) => standTree(firStock, x, z, scale * 0.8, 0.9);
+    const addFir = (x: number, z: number, scale: number) => standTree(firStock, x, z, scale * 0.92, 0.9);
     const addBroadleaf = (x: number, z: number, scale: number, extraBranches = false) =>
       standTree(broadleafStock, x, z, scale * 1.15, 1.1, extraBranches);
 
@@ -2329,11 +2299,8 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     // Shafts are aimed: they spawn in the column of sky that drifts down onto
     // the roof, so the light lands on the panels instead of raining on the
     // whole plot. The x offset accounts for the slant travelled on the way.
-    const RAY_SLANT = 0.42;
     const RAY_TOP = 13.5;
-    const RAY_SPAN = 9.2;
-    const ROOF_X = 4.0;
-    const ROOF_Z = -1.0;
+    panels.updateWorldMatrix(true, true);
 
     const makeRays = (count: number) => {
       // Four vertices per shaft: head and tail, each side of the width.
@@ -2346,15 +2313,25 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       const sides = new Float32Array(verts);
       const widths = new Float32Array(verts);
       const beams = new Float32Array(verts);
+      const spans = new Float32Array(verts);
       const index = new Uint16Array(count * 6);
 
-      const drift = Math.tan(RAY_SLANT) * RAY_SPAN;
       for (let i = 0; i < count; i++) {
-        // Chosen so that after drifting it arrives over the roof.
         const beam = i < 3;
-        const x = beam ? ROOF_X - drift - 2.1 + i * 1.8 : ROOF_X + (Math.random() - 0.5) * 5.6 - drift * 0.55 - 1.9;
-        const y = Math.random() * RAY_SPAN;
-        const z = beam ? ROOF_Z - 1.5 + i * 0.8 : ROOF_Z + (Math.random() - 0.5) * 4.6;
+        const panel = panels.children[beam ? i * 3 : i % panels.children.length]!;
+        const across = beam ? 0 : (Math.random() - 0.5) * PANEL_W * 0.8;
+        const along = beam ? 0 : (Math.random() - 0.5) * PANEL_H * 0.8;
+        const surfaceOffset = PANEL_T / 2 + 0.015;
+        const target = panel.localToWorld(new THREE.Vector3(
+          across * cosS + sinS * surfaceOffset,
+          -across * sinS + cosS * surfaceOffset,
+          along,
+        ));
+        if (beam) sunHits.value[i]!.copy(target);
+        const span = RAY_TOP - target.y;
+        const x = target.x - Math.tan(RAY_SLANT) * span;
+        const y = RAY_TOP - Math.random() * span;
+        const z = target.z;
         const rate = beam ? 0.2 + i * 0.3 : Math.random();
         const seed = beam ? 0 : Math.random();
         // Strongly varied: short dashes through to long streaks.
@@ -2375,6 +2352,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
           sides[v] = c === 0 || c === 3 ? -1 : 1;
           widths[v] = width;
           beams[v] = beam ? 1 : 0;
+          spans[v] = span;
         }
 
         const b = i * 4;
@@ -2390,6 +2368,7 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
       geo.setAttribute("aSide", new THREE.BufferAttribute(sides, 1));
       geo.setAttribute("aWidth", new THREE.BufferAttribute(widths, 1));
       geo.setAttribute("aBeam", new THREE.BufferAttribute(beams, 1));
+      geo.setAttribute("aSpan", new THREE.BufferAttribute(spans, 1));
       geo.setIndex(new THREE.BufferAttribute(index, 1));
 
       const uniforms = {
@@ -2399,7 +2378,6 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         uAmount: { value: 1 },
         uSlant: { value: Math.tan(RAY_SLANT) },
         uTop: { value: RAY_TOP },
-        uSpan: { value: RAY_SPAN },
       };
       const mat = track(
         new THREE.ShaderMaterial({
@@ -2454,6 +2432,42 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
     const rays = makeRays(RAY_COUNT);
     rays.points.renderOrder = 4;
     scene.add(rays.points);
+
+    const flareCanvas = document.createElement("canvas");
+    flareCanvas.width = flareCanvas.height = 128;
+    const flareContext = flareCanvas.getContext("2d")!;
+    const flareGradient = flareContext.createRadialGradient(64, 64, 0, 64, 64, 62);
+    flareGradient.addColorStop(0, "rgba(255,250,230,1)");
+    flareGradient.addColorStop(0.08, "rgba(255,244,215,0.85)");
+    flareGradient.addColorStop(0.3, "rgba(255,237,195,0.12)");
+    flareGradient.addColorStop(1, "rgba(255,237,195,0)");
+    flareContext.fillStyle = flareGradient;
+    flareContext.fillRect(0, 0, 128, 128);
+    for (const rotation of [0, Math.PI / 2]) {
+      flareContext.save();
+      flareContext.translate(64, 64);
+      flareContext.rotate(rotation);
+      flareContext.scale(1, 0.055);
+      flareContext.translate(-64, -64);
+      flareContext.fillRect(0, 0, 128, 128);
+      flareContext.restore();
+    }
+    const flareTexture = track(new THREE.CanvasTexture(flareCanvas));
+    const panelNormal = new THREE.Vector3(sinS, cosS, 0).transformDirection(house.matrixWorld);
+    const reflectedSun = sunDirection.clone().negate().reflect(panelNormal);
+    const flareView = new THREE.Vector3();
+    const sunFlares = sunHits.value.map((hit) => {
+      const material = track(new THREE.SpriteMaterial({
+        map: flareTexture, transparent: true, opacity: 0,
+        depthTest: true, depthWrite: false, blending: THREE.AdditiveBlending,
+        toneMapped: false, rotation: Math.PI / 4,
+      }));
+      const flare = new THREE.Sprite(material);
+      flare.position.copy(hit).addScaledVector(panelNormal, 0.045);
+      flare.scale.setScalar(0.65);
+      scene.add(flare);
+      return flare;
+    });
 
     const rain = makeRain(320);
     rain.points.renderOrder = 4;
@@ -2627,17 +2641,24 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
         bank.edges.opacity += (0.35 + stringPower * 0.45 - bank.edges.opacity) * 0.04;
       });
 
-      // Glints ride on daylight, not on output: the glass catches the sun
-      // whether or not the array is doing much with it. They fade out at
-      // dusk with the rest of the direct light.
+      const directSun = target.day * (1 - target.cloud) * (1 - target.dusk * 0.85);
       glintClock.value += dt;
+      glintLife.value.forEach((_, index) => {
+        const cycle = glintClock.value / 8.5 + index * 0.37;
+        const slot = Math.floor(cycle);
+        const age = (cycle - slot) * 8.5;
+        const seed = Math.sin(slot * 45.164 + index * 78.233) * 43758.5453;
+        const active = seed - Math.floor(seed) > 0.35;
+        glintLife.value[index] = active
+          ? 0.55 * THREE.MathUtils.smoothstep(age, 0, 0.22) * (1 - THREE.MathUtils.smoothstep(age, 0.35, 1.15))
+          : 0;
+      });
       glintUniform.value +=
-        (target.day * (1 - target.cloud * 0.75) * (1 - target.dusk * 0.85) * 1.5 - glintUniform.value) * 0.03;
+        (directSun * 1.5 - glintUniform.value) * 0.03;
 
       // A light suggestion of direct sun, not a weather effect. The warmer
       // key light owns golden hour; these thin out before it takes over.
-      const rayTarget =
-        target.day * (0.2 + (1 - target.cloud) * 0.8) * (0.07 + solar * 0.12) * (1 - target.dusk * 0.8);
+      const rayTarget = directSun * 0.17;
       rays.uniforms.uOpacity.value += (rayTarget - rays.uniforms.uOpacity.value) * 0.03;
       // Fraction of shafts drawn, straight from PV output.
       rays.uniforms.uAmount.value += (Math.min(0.13 + solar * 0.38, 0.48) - rays.uniforms.uAmount.value) * 0.03;
@@ -2681,6 +2702,11 @@ export function HouseScene({ state, weather }: { state: HouseState; weather: Hou
 
       camera.updateMatrixWorld();
       house.updateMatrixWorld();
+      sunFlares.forEach((flare, index) => {
+        flareView.copy(camera.position).sub(sunHits.value[index]!).normalize();
+        const viewStrength = Math.pow(Math.max(0, flareView.dot(reflectedSun)), 12);
+        flare.material.opacity = glintUniform.value * glintLife.value[index]! * (0.06 + viewStrength) * 0.85;
+      });
       for (const pin of scenePins) {
         let pinScale = 0.0105;
         pin.sprite.position.copy(pin.anchor);

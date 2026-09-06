@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { EnergyTotals, PlugReading, Snapshot } from "../server/types.ts";
 import { TodaySummary } from "../web/src/TodaySummary.tsx";
 import { Readings } from "../web/src/Readings.tsx";
+import { SmartMeter } from "../web/src/SmartMeter.tsx";
 import { Sockets } from "../web/src/Sockets.tsx";
 import type { WeatherReport } from "../server/weather.ts";
 import { solarInsights } from "../web/src/insights.ts";
@@ -62,6 +63,27 @@ assert.match(sockets, /75 percent of socket energy today/);
 assert.doesNotMatch(sockets, /9\.88 kW/);
 assert.match(sockets, /100 W/);
 assert.match(renderToStaticMarkup(<Sockets plugs={[]} onRenamed={() => {}} />), /No sockets connected yet/);
+const meter = (overrides: Partial<Snapshot> = {}, connected = true) => renderToStaticMarkup(
+  <SmartMeter snapshot={{ ...snapshot, ...overrides }} connected={connected} />,
+);
+const absentMeter = meter({ gridW: 9876, homeSource: "meter", homeW: 1234 });
+assert.match(absentMeter, /is-unavailable/);
+assert.match(absentMeter, /No Smart Meter detected/);
+assert.equal((absentMeter.match(/<strong>--<\/strong>/g) ?? []).length, 5);
+assert.doesNotMatch(absentMeter, /Preview|Sample|<button|9\.88 kW|1\.23 kW|0 W|is-active|Balanced/);
+assert.match(absentMeter, /class="meter-route-track"><\/span>/);
+const measuredImport = meter({ gridMeasured: true, gridW: 425, homeSource: "meter", homeW: 1100 });
+assert.match(measuredImport, /425 W/);
+assert.match(measuredImport, /1\.10 kW/);
+assert.match(measuredImport, /Imported today<\/span><strong>--/);
+assert.doesNotMatch(measuredImport, /Sample|Preview|6\.80 kWh|860 W/);
+const measuredExport = meter({ gridMeasured: true, gridW: -1240 });
+assert.match(measuredExport, /smart-meter meter-export/);
+assert.match(measuredExport, /1\.24 kW/);
+assert.match(measuredExport, /Whole-home load<\/span><strong>--/);
+assert.match(meter({ gridMeasured: true, gridW: 0 }), /smart-meter meter-balanced/);
+assert.match(meter({ gridMeasured: true, staleSeconds: 21 }), /Last measured readings/);
+assert.match(meter({ gridMeasured: true }, false), /Last measured readings/);
 const hour = 3600_000;
 const current = Math.floor(snapshot.ts / hour) * hour;
 const forecast: WeatherReport = {
@@ -91,4 +113,40 @@ const forecastMarkup = renderToStaticMarkup(<>
 assert.equal((forecastMarkup.match(/Review limits/g) ?? []).length, 1);
 assert.doesNotMatch(forecastMarkup, /forecast-verdict|Legacy duplicate advice/);
 assert(forecastMarkup.indexOf('class="days"') < forecastMarkup.indexOf('class="forecast-insights"'));
-console.log("Dashboard checks passed: reserve, missing data, ETA consistency, totals, socket sorting, tariff scope and forecast calibration gates.");
+const forecastDay = new Date(2026, 8, 6).getTime();
+const todayForecast = {
+  ...forecast,
+  days: [0, 1].map((offset) => ({
+    ...forecast.days[0]!,
+    date: new Date(forecastDay + offset * 24 * hour).toLocaleDateString("sv"),
+    sunrise: new Date(forecastDay + (offset * 24 + 6) * hour).toISOString(),
+    sunset: new Date(forecastDay + (offset * 24 + 18) * hour).toISOString(),
+  })),
+  hours: Array.from({ length: 48 }, (_, index) => ({ ...forecast.hours[0]!, ts: forecastDay + index * hour })),
+};
+const realNow = Date.now;
+const forecastAt = (hoursAfterMidnight: number) => {
+  Date.now = () => forecastDay + hoursAfterMidnight * hour;
+  try {
+    return renderToStaticMarkup(<Weather report={todayForecast} needsLocation={false} error={null} adopt={() => {}} />);
+  } finally {
+    Date.now = realNow;
+  }
+};
+const middayForecast = forecastAt(12);
+assert.equal((middayForecast.match(/day-featured/g) ?? []).length, 1);
+assert.equal((middayForecast.match(/class="day-sun-times"/g) ?? []).length, 1);
+assert.match(middayForecast, /Sunrise<\/span><strong>/);
+assert.match(middayForecast, /Sunset<\/span><strong>/);
+assert.match(middayForecast, /Tomorrow/);
+assert.match(middayForecast, /class="day-time-axis"/);
+assert.match(middayForecast, /class="day-profile-elapsed" clip-path="url\(#[^"]+-elapsed\)"/);
+assert.equal((middayForecast.match(/class="day-profile-remaining"/g) ?? []).length, 1);
+assert.equal((middayForecast.match(/class="day-profile-now"/g) ?? []).length, 1);
+assert.match(middayForecast, /6h 00m left/);
+const markerX = Number(middayForecast.match(/class="day-profile-now"><line x1="([\d.]+)"/)?.[1]);
+assert(Math.abs(markerX - 12 / 23 * 100) < 0.01);
+assert.match(forecastAt(5), /Sunrise /);
+assert.match(forecastAt(18), /Sunset passed/);
+assert.match(forecastAt(17.5), /0h 30m left/);
+console.log("Dashboard checks passed: reserve, missing data, ETA consistency, totals, socket sorting, tariff scope, forecast calibration, current-time marker and daylight remaining.");

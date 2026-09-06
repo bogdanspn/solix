@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { DeviceInfo, EnergyTotals, Snapshot } from "../../server/types.ts";
 import { PowerFlow } from "./PowerFlow.tsx";
 import { Readings } from "./Readings.tsx";
+import { SmartMeter } from "./SmartMeter.tsx";
 import { TodaySummary } from "./TodaySummary.tsx";
 import { Insights } from "./Insights.tsx";
 import { isBoolean, usePreference } from "./preferences.ts";
@@ -192,9 +193,6 @@ export function App() {
   const stale = snapshot.staleSeconds > 20;
   const offline = !snapshot.online || !connected;
   const statusClass = offline ? "offline" : stale ? "stale" : "";
-  const mode =
-    info?.modes.find((m) => m.value === snapshot.operatingMode)?.label ??
-    snapshot.operatingMode.replace(/_/g, " ");
 
   return (
     <div className={`app${compact ? " is-compact" : ""}${theme === "light" && weather.report && !weather.report.now.isDay ? " is-light-night" : ""}`}>
@@ -229,7 +227,6 @@ export function App() {
               </span>
             );
           })()}
-          <span className="mode-chip">{mode}</span>
           <span className={`status ${statusClass}`}>
             <span className="dot" />
             {offline
@@ -297,7 +294,7 @@ export function App() {
       <div ref={setNavMarker} className="nav-marker" aria-hidden="true" />
       <nav className={`dashboard-nav${navStuck ? " is-stuck" : ""}`} aria-label="Dashboard sections">
         <div>{["Overview", "Forecast", "Sockets", "History"].map((label) => <a key={label} href={`#${label.toLowerCase()}`} aria-current={section === label.toLowerCase() ? "location" : undefined}>{label}</a>)}</div>
-        <label className="compact-toggle"><span>Compact view</span><input type="checkbox" role="switch" checked={compact} onChange={(event) => setCompact(event.target.checked)} /><span className="compact-toggle-track" aria-hidden="true" /></label>
+        <label className="compact-toggle" title="Compact view"><span className="compact-toggle-label">Compact view</span><input type="checkbox" role="switch" aria-label="Compact view" checked={compact} onChange={(event) => setCompact(event.target.checked)} /><span className="compact-toggle-track" aria-hidden="true" /></label>
       </nav>
       <div id="overview" className="dashboard-anchor">
       <TodaySummary snapshot={snapshot} today={snapshot.today} ratedKwh={info?.device.ratedKwh ?? null} />
@@ -319,6 +316,10 @@ export function App() {
 
         <section className="card battery-card">
           <Readings snapshot={snapshot} today={snapshot.today} device={info?.device ?? null} />
+        </section>
+
+        <section className="card span-2 smart-meter-card">
+          <SmartMeter snapshot={snapshot} connected={connected} />
         </section>
 
         <section className="card span-2 dashboard-anchor" id="forecast">

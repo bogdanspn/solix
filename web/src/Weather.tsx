@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { DayForecast, HourPoint, Place, WeatherReport } from "../../server/weather.ts";
 import { IconDrop, IconPin, IconSun } from "./Icons.tsx";
 import { weatherLook } from "./WeatherIcon.tsx";
@@ -50,20 +50,41 @@ function dayCode(hours: HourPoint[]): number | null {
  * Scaled against the peak across the whole window, not each day's own, so the
  * seven curves are comparable at a glance.
  */
-function DayProfile({ hours, peak }: { hours: HourPoint[]; peak: number }) {
+function DayProfile({ hours, peak, now }: { hours: HourPoint[]; peak: number; now?: number }) {
+  const remainingId = useId();
   const W = 100;
   const H = 40;
   if (hours.length < 2) return <svg className="day-profile" viewBox={`0 0 ${W} ${H}`} />;
 
-  const x = (i: number) => (i / (hours.length - 1)) * W;
+  const first = hours[0]!.ts;
+  const span = hours[hours.length - 1]!.ts - first;
+  if (span <= 0) return <svg className="day-profile" viewBox={`0 0 ${W} ${H}`} />;
+  const x = (timestamp: number) => ((timestamp - first) / span) * W;
   const y = (r: number) => H - Math.min(r / peak, 1) * (H - 2);
-  const line = hours.map((h, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(2)} ${y(h.radiation).toFixed(2)}`).join(" ");
+  const line = hours.map((h, i) => `${i === 0 ? "M" : "L"} ${x(h.ts).toFixed(2)} ${y(h.radiation).toFixed(2)}`).join(" ");
+  const currentX = now !== undefined ? Math.max(0, Math.min(W, x(now))) : null;
 
   return (
-    <svg className="day-profile" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden>
-      <path d={`${line} L ${W} ${H} L 0 ${H} Z`} className="day-profile-fill" />
-      <path d={line} className="day-profile-line" />
+    <><svg className="day-profile" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden>
+      <g className={currentX === null ? undefined : "day-profile-elapsed"} clipPath={currentX === null ? undefined : `url(#${remainingId}-elapsed)`}>
+        <path d={`${line} L ${W} ${H} L 0 ${H} Z`} className="day-profile-fill" />
+        <path d={line} className="day-profile-line" />
+      </g>
+      {currentX !== null && <>
+        <defs>
+          <clipPath id={`${remainingId}-elapsed`}><rect x={0} y={0} width={currentX} height={H} /></clipPath>
+          <clipPath id={remainingId}><rect x={currentX} y={0} width={W - currentX} height={H} /></clipPath>
+        </defs>
+        <g clipPath={`url(#${remainingId})`} className="day-profile-remaining">
+          <path d={`${line} L ${W} ${H} L 0 ${H} Z`} className="day-profile-fill" />
+          <path d={line} className="day-profile-line" />
+        </g>
+      </>}
+      {currentX !== null && <g className="day-profile-now">
+        <line x1={currentX} x2={currentX} y1={0} y2={H} vectorEffect="non-scaling-stroke" />
+      </g>}
     </svg>
+    {currentX !== null && <span className="day-profile-label" style={{ left: `clamp(14px, ${currentX}%, calc(100% - 14px))` }} aria-hidden>Now</span>}</>
   );
 }
 
@@ -81,9 +102,19 @@ function daylight(d: DayForecast): string {
   return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
 }
 
+function daylightLeft(d: DayForecast, now: number): string {
+  const rise = new Date(d.sunrise).getTime();
+  const set = new Date(d.sunset).getTime();
+  if (!Number.isFinite(rise) || !Number.isFinite(set) || set <= rise) return daylight(d);
+  if (now < rise) return `Sunrise ${clockOf(rise)}`;
+  if (now >= set) return "Sunset passed";
+  const mins = Math.ceil((set - now) / 60000);
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+}
+
 function dayName(date: string, index: number): string {
   if (index === 0) return "Today";
-  if (index === 1) return "Tom";
+  if (index === 1) return "Tomorrow";
   return new Date(date).toLocaleDateString([], { weekday: "short" });
 }
 
@@ -216,6 +247,12 @@ export function Weather({
   adopt,
 }: WeatherState) {
   const [picking, setPicking] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const today = new Date(now).toLocaleDateString("sv");
 
   const peak = report ? Math.max(...report.days.map((d) => d.solarKwhM2), 0.1) : 1;
   // Bucketed once here rather than filtered per day inside the map, which
@@ -274,6 +311,14 @@ export function Weather({
           <div className="days">
             {report.days.map((d, i) => {
               const hours = byDate.get(d.date) ?? [];
+              const isToday = d.date === today;
+              const featured = i === 0;
+              const profileStart = hours[0]?.ts ?? 0;
+              const profileSpan = (hours[hours.length - 1]?.ts ?? 0) - profileStart;
+              const ticks = profileSpan > 0 ? hours.filter((hour) => {
+                const localHour = new Date(hour.ts).getHours();
+                return localHour > 0 && localHour % 6 === 0;
+              }) : [];
                 const code = dayCode(hours);
                 const look = code === null ? null : weatherLook(code, true);
                 const best = hours.reduce(
@@ -281,23 +326,26 @@ export function Weather({
                   hours[0] ?? { radiation: 0, ts: 0 },
                 );
                 return (
-                  <div className={`day ${i === 0 ? "is-today" : ""}`} key={d.date}>
+                  <div className={`day ${featured ? "is-today day-featured" : ""}`} key={d.date}>
                     <div className="day-head">
                       <span className="day-name">{dayName(d.date, i)}</span>
                       {look && (
                         <span className="day-ico" style={{ color: look.tone }} title={look.label}>
-                          <look.Icon size={16} />
+                          {featured && <span className="day-condition">{look.label}</span>}<look.Icon size={featured ? 20 : 16} />
                         </span>
                       )}
                     </div>
 
                     <div
                       className="day-chart"
-                      style={{ opacity: 0.35 + (d.solarKwhM2 / peak) * 0.65 }}
-                      title={`${d.solarKwhM2} kWh/m² over the day`}
+                      style={{ opacity: featured ? 1 : 0.35 + (d.solarKwhM2 / peak) * 0.65 }}
+                      title={`${d.solarKwhM2} kWh/m² over the day${isToday ? ` · Now ${clockOf(now)}` : ""}`}
                     >
-                      <DayProfile hours={hours} peak={peakRadiation} />
+                      <DayProfile hours={hours} peak={peakRadiation} now={isToday ? now : undefined} />
                     </div>
+                    {featured && <div className="day-time-axis" aria-label="Forecast times">
+                      {ticks.map((hour) => <span key={hour.ts} style={{ left: `${(hour.ts - profileStart) / profileSpan * 100}%` }}>{clockOf(hour.ts)}</span>)}
+                    </div>}
 
                     <div className="day-figs">
                       <span className="day-sun">
@@ -311,6 +359,10 @@ export function Weather({
                       )}
                     </div>
 
+                    {featured && <div className="day-sun-times">
+                      <div><span>Sunrise</span><strong>{Number.isFinite(Date.parse(d.sunrise)) ? clockOf(Date.parse(d.sunrise)) : "--"}</strong></div>
+                      <div><span>Sunset</span><strong>{Number.isFinite(Date.parse(d.sunset)) ? clockOf(Date.parse(d.sunset)) : "--"}</strong></div>
+                    </div>}
                     <div className="day-meta">
                       <span className="day-temp">
                         {Math.round(d.tempMax)}° <span className="muted">{Math.round(d.tempMin)}°</span>
@@ -318,8 +370,8 @@ export function Weather({
                       <span className={`day-rain ${d.precipPct >= 40 ? "wet" : ""}`}>
                         <IconDrop size={10} /> {d.precipPct}%
                       </span>
-                      <span className="day-light" title="Sunrise to sunset">
-                        {daylight(d)}
+                      <span className={`day-light${isToday ? " day-light-remaining" : ""}`} title={isToday ? "Remaining daylight until sunset, not guaranteed sunshine" : "Sunrise to sunset"}>
+                        {isToday ? daylightLeft(d, now) : daylight(d)}
                       </span>
                     </div>
                   </div>
